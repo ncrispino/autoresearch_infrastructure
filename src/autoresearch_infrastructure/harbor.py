@@ -17,6 +17,7 @@ from harbor.agents.installed.codex import Codex
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
 from harbor.models.task.id import LocalTaskId
+from harbor.models.trajectories import Trajectory
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig, VerifierConfig
 from harbor.models.trial.result import AgentInfo, ModelInfo, TrialResult
 from harbor.utils.trajectory_utils import format_trajectory_json
@@ -99,10 +100,12 @@ def _register_observation_unlocked(
     jobs_root: Path,
     role: str,
     scope: str,
+    agent_name: str,
+    viewer_agent_name: str,
     model: str,
     version: str,
     trajectory: bytes,
-    native_logs: Path,
+    native_assets: Path | None,
     started_at: datetime,
     finished_at: datetime,
 ) -> tuple[Path, str, str]:
@@ -116,7 +119,8 @@ def _register_observation_unlocked(
     trial_dir = job_dir / trial_name
     agent_dir = trial_dir / "agent"
     write_bytes(agent_dir / "trajectory.json", trajectory)
-    _copy_images(native_logs, agent_dir)
+    if native_assets is not None:
+        _copy_images(native_assets, agent_dir)
 
     validator = TrajectoryValidator()
     if not validator.validate(agent_dir / "trajectory.json"):
@@ -129,7 +133,7 @@ def _register_observation_unlocked(
     )
     job_id = uuid5(NAMESPACE_URL, job_dir.resolve().as_uri())
     trial_id = uuid5(NAMESPACE_URL, trial_dir.resolve().as_uri())
-    agent = AgentConfig(name=f"autoresearch-{role_label}", model_name=model)
+    agent = AgentConfig(name=viewer_agent_name, model_name=model)
     verifier = VerifierConfig(disable=True)
     trial_config = TrialConfig(
         task=task,
@@ -149,7 +153,7 @@ def _register_observation_unlocked(
         task_checksum=sha256,
         config=trial_config,
         agent_info=AgentInfo(
-            name="codex",
+            name=agent_name,
             version=version,
             model_info=_model_info(model),
         ),
@@ -200,10 +204,12 @@ def _register_observation(
     jobs_root: Path,
     role: str,
     scope: str,
+    agent_name: str,
+    viewer_agent_name: str,
     model: str,
     version: str,
     trajectory: bytes,
-    native_logs: Path,
+    native_assets: Path | None,
     started_at: datetime,
     finished_at: datetime,
 ) -> tuple[Path, str, str]:
@@ -215,13 +221,65 @@ def _register_observation(
             jobs_root,
             role,
             scope,
+            agent_name,
+            viewer_agent_name,
             model,
             version,
             trajectory,
-            native_logs,
+            native_assets,
             started_at,
             finished_at,
         )
+
+
+def publish_atif(
+    document: Trajectory,
+    evidence_path: Path,
+    jobs_root: Path,
+    *,
+    role: str,
+    scope: str,
+    started_at: datetime,
+    finished_at: datetime,
+    native_assets: Path | None = None,
+    viewer_agent_name: str | None = None,
+) -> dict[str, str | int]:
+    """Publish one validated ATIF document as evidence and a Harbor trial."""
+    data = format_trajectory_json(document.to_json_dict()).encode("utf-8")
+    if len(data) > MAX_ATIF_BYTES:
+        raise RuntimeError("Autoresearch ATIF trajectory exceeds 50 MB")
+    write_bytes(evidence_path, data)
+    if native_assets is not None:
+        _copy_images(native_assets, evidence_path.parent)
+    evidence_validator = TrajectoryValidator()
+    if not evidence_validator.validate(evidence_path):
+        details = "; ".join(evidence_validator.get_errors()[:5])
+        raise RuntimeError(f"Autoresearch evidence ATIF is invalid: {details}")
+
+    agent = document.agent
+    viewer_path, job_name, trial_name = _register_observation(
+        jobs_root,
+        role,
+        scope,
+        agent.name,
+        viewer_agent_name or agent.name,
+        agent.model_name or "unknown",
+        agent.version,
+        data,
+        native_assets,
+        started_at,
+        finished_at,
+    )
+    if evidence_path.read_bytes() != viewer_path.read_bytes():
+        raise RuntimeError("ATIF evidence differs from the viewer trajectory")
+    return {
+        "format": "ATIF",
+        "schema_version": document.schema_version,
+        "steps": len(document.steps),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "viewer_job": job_name,
+        "viewer_trial": trial_name,
+    }
 
 
 def publish_codex_atif(
@@ -245,33 +303,14 @@ def publish_codex_atif(
     raw = document.to_json_dict()
     if raw.get("agent", {}).get("name") != "codex":
         raise RuntimeError("Codex conversion produced an unexpected agent identity")
-    data = format_trajectory_json(raw).encode("utf-8")
-    if len(data) > MAX_ATIF_BYTES:
-        raise RuntimeError("Autoresearch ATIF trajectory exceeds 50 MB")
-    write_bytes(evidence_path, data)
-    _copy_images(native_logs, evidence_path.parent)
-    evidence_validator = TrajectoryValidator()
-    if not evidence_validator.validate(evidence_path):
-        details = "; ".join(evidence_validator.get_errors()[:5])
-        raise RuntimeError(f"Autoresearch evidence ATIF is invalid: {details}")
-    viewer_path, job_name, trial_name = _register_observation(
+    return publish_atif(
+        document,
+        evidence_path,
         jobs_root,
-        role,
-        scope,
-        model,
-        version,
-        data,
-        native_logs,
-        started_at,
-        finished_at,
+        role=role,
+        scope=scope,
+        started_at=started_at,
+        finished_at=finished_at,
+        native_assets=native_logs,
+        viewer_agent_name=f"autoresearch-{_label(role)}",
     )
-    if evidence_path.read_bytes() != viewer_path.read_bytes():
-        raise RuntimeError("ATIF evidence differs from the viewer trajectory")
-    return {
-        "format": "ATIF",
-        "schema_version": document.schema_version,
-        "steps": len(document.steps),
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "viewer_job": job_name,
-        "viewer_trial": trial_name,
-    }

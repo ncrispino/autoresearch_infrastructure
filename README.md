@@ -230,6 +230,11 @@ The page charts each metric by candidate and shows how many proposals were
 valid. Select a candidate to see its files, its diff from its parent, the
 review, the measurements, and the agents' own trajectories.
 
+Integrations can register any validated Harbor `Trajectory` with
+`publish_atif`, then serve its jobs directory through
+`create_harbor_viewer_app`. The helper uses Harbor's packaged interface and
+allowlists only its finished-job read routes.
+
 <details>
 <summary>The results page for the curve-fitting demo</summary>
 

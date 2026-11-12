@@ -1328,25 +1328,82 @@ def write_html_preview(
     }
 
 
-def create_viewer_app(output: Path, *, template: str | None = None, partial_evidence: Path | None = None):
-    """Create one read-only app with research navigation and Harbor rendering."""
-    from fastapi import HTTPException
-    from fastapi.responses import FileResponse, HTMLResponse, Response
+def create_harbor_viewer_app(jobs: Path, *, title: str = "Harbor trajectory viewer"):
+    """Create Harbor's packaged UI with only its finished-job read routes."""
+    from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
     from harbor.cli.view import STATIC_DIR
     from harbor.viewer import create_app
 
-    build_index(output, partial_evidence=partial_evidence)
-    output = output.resolve()
-    jobs = output / "harbor-jobs"
-    app = create_app(jobs, mode="jobs", static_dir=None)
-    app.title = "Research trajectory viewer"
-    allowed = {"GET", "HEAD", "OPTIONS"}
+    app = create_app(jobs.resolve(), mode="jobs", static_dir=None)
+    app.title = title
+    read_routes = {
+        "health_check",
+        "get_config",
+        "get_model_pricing",
+        "get_job_filters",
+        "list_jobs",
+        "get_job",
+        "get_job_analysis",
+        "get_comparison_data",
+        "get_job_config",
+        "get_task_filters",
+        "list_tasks",
+        "trial_navigation",
+        "chart_trials",
+        "list_trials",
+        "get_trial",
+        "get_trajectory",
+        "get_interaction",
+        "get_verifier_output",
+        "list_trial_files",
+        "get_recording",
+        "get_recording_file",
+        "get_trial_file",
+        "get_artifacts",
+        "get_agent_logs",
+    }
+    allowed_methods = {"GET", "HEAD", "OPTIONS"}
     app.router.routes = [
         route
         for route in app.router.routes
-        if not getattr(route, "methods", None) or set(route.methods).issubset(allowed)
+        if getattr(route, "name", None) in read_routes
+        and set(getattr(route, "methods", ()) or ()).issubset(allowed_methods)
     ]
+    if STATIC_DIR.is_dir():
+        assets = STATIC_DIR / "assets"
+        fonts = STATIC_DIR / "fonts"
+        if assets.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets), name="harbor-assets")
+        if fonts.is_dir():
+            app.mount("/fonts", StaticFiles(directory=fonts), name="harbor-fonts")
+
+        @app.get("/favicon.ico")
+        def favicon() -> FileResponse:
+            return FileResponse(STATIC_DIR / "favicon.ico")
+
+        @app.get("/favicon.svg")
+        def favicon_svg() -> FileResponse:
+            return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
+
+        @app.get("/jobs")
+        @app.get("/jobs/{path:path}")
+        def harbor_spa(path: str = "") -> FileResponse:
+            del path
+            return FileResponse(STATIC_DIR / "index.html")
+
+    return app
+
+
+def create_viewer_app(output: Path, *, template: str | None = None, partial_evidence: Path | None = None):
+    """Create one read-only app with research navigation and Harbor rendering."""
+    from fastapi import HTTPException
+    from fastapi.responses import HTMLResponse, Response
+
+    build_index(output, partial_evidence=partial_evidence)
+    output = output.resolve()
+    jobs = output / "harbor-jobs"
+    app = create_harbor_viewer_app(jobs, title="Research trajectory viewer")
 
     @app.get("/api/research")
     def research_index() -> dict:
@@ -1378,28 +1435,6 @@ def create_viewer_app(output: Path, *, template: str | None = None, partial_evid
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> str:
         return dashboard_html(template=template)
-
-    if STATIC_DIR.is_dir():
-        assets = STATIC_DIR / "assets"
-        fonts = STATIC_DIR / "fonts"
-        if assets.is_dir():
-            app.mount("/assets", StaticFiles(directory=assets), name="harbor-assets")
-        if fonts.is_dir():
-            app.mount("/fonts", StaticFiles(directory=fonts), name="harbor-fonts")
-
-        @app.get("/favicon.ico")
-        def favicon() -> FileResponse:
-            return FileResponse(STATIC_DIR / "favicon.ico")
-
-        @app.get("/favicon.svg")
-        def favicon_svg() -> FileResponse:
-            return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
-
-        @app.get("/jobs")
-        @app.get("/jobs/{path:path}")
-        def harbor_spa(path: str = "") -> FileResponse:
-            del path
-            return FileResponse(STATIC_DIR / "index.html")
 
     return app
 

@@ -5,11 +5,13 @@ import pytest
 
 pytest.importorskip("harbor")
 from harbor.models.job.result import JobResult
+from harbor.models.trajectories import Agent, Step, Trajectory
 from harbor.models.trial.result import TrialResult
 from harbor.viewer.scanner import JobScanner
 from harbor.viewer.server import create_app
 
 from autoresearch_infrastructure import harbor as trajectories
+from autoresearch_infrastructure.viewer import create_harbor_viewer_app
 
 
 def test_controller_agent_atif_is_the_same_file_used_by_harbor_viewer(tmp_path):
@@ -63,7 +65,9 @@ def test_controller_agent_atif_is_the_same_file_used_by_harbor_viewer(tmp_path):
 
     trial = jobs / metadata["viewer_job"] / metadata["viewer_trial"]
     assert evidence.read_bytes() == (trial / "agent/trajectory.json").read_bytes()
-    TrialResult.model_validate_json((trial / "result.json").read_text())
+    first_result = TrialResult.model_validate_json((trial / "result.json").read_text())
+    assert first_result.config.agent.name == "autoresearch-researcher"
+    assert first_result.agent_info.name == "codex"
     JobResult.model_validate_json((trial.parent / "result.json").read_text())
     scanner = JobScanner(jobs)
     job = scanner.get_job_result(metadata["viewer_job"])
@@ -79,6 +83,62 @@ def test_controller_agent_atif_is_the_same_file_used_by_harbor_viewer(tmp_path):
     )
     viewed = endpoint(metadata["viewer_job"], metadata["viewer_trial"], None)
     assert viewed["steps"][0]["message"] == "finished"
+
+
+def test_generic_atif_is_the_same_file_used_by_harbor_viewer(tmp_path):
+    document = Trajectory(
+        session_id="mini-session",
+        agent=Agent(
+            name="mini-swe-agent",
+            version="2.4.6",
+            model_name="openrouter/deepseek",
+        ),
+        steps=[Step(step_id=1, source="user", message="inspect the task")],
+    )
+    evidence = tmp_path / "evidence/trajectory.json"
+    jobs = tmp_path / "harbor-jobs"
+    now = datetime.now(timezone.utc)
+
+    metadata = trajectories.publish_atif(
+        document,
+        evidence,
+        jobs,
+        role="attacker",
+        scope="benign",
+        started_at=now,
+        finished_at=now,
+    )
+
+    trial = jobs / metadata["viewer_job"] / metadata["viewer_trial"]
+    assert evidence.read_bytes() == (trial / "agent/trajectory.json").read_bytes()
+    result = TrialResult.model_validate_json((trial / "result.json").read_text())
+    assert result.agent_info.name == "mini-swe-agent"
+    assert result.config.agent.name == "mini-swe-agent"
+    scanner = JobScanner(jobs)
+    assert scanner.get_trial_result(metadata["viewer_job"], metadata["viewer_trial"]) is not None
+    endpoint = next(
+        route.endpoint
+        for route in create_app(jobs).routes
+        if route.path == "/api/jobs/{job_name}/trials/{trial_name}/trajectory"
+    )
+    viewed = endpoint(metadata["viewer_job"], metadata["viewer_trial"], None)
+    assert viewed == document.to_json_dict()
+
+
+def test_generic_harbor_viewer_app_is_read_only(tmp_path):
+    app = create_harbor_viewer_app(tmp_path / "harbor-jobs", title="Evaluation viewer")
+
+    assert app.title == "Evaluation viewer"
+    paths = {getattr(route, "path", None) for route in app.routes}
+    assert "/api/jobs" in paths
+    assert "/jobs/{path:path}" in paths
+    assert "/api/jobs/{job_name}/upload" not in paths
+    assert not any(path and path.startswith("/api/auth") for path in paths)
+    assert not any(path and path.startswith("/api/run") for path in paths)
+    assert "/auth/callback" not in paths
+    for route in app.routes:
+        methods = getattr(route, "methods", None)
+        assert not methods or set(methods).issubset({"GET", "HEAD", "OPTIONS"})
 
 
 def test_controller_agent_atif_rejects_model_created_native_symlinks(tmp_path):
