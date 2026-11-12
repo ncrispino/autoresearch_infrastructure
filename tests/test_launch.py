@@ -245,13 +245,15 @@ def test_an_invalid_baseline_starts_no_researcher(example, monkeypatch):
 
 
 def test_the_reviewer_sees_only_candidates_that_pass_the_validity_function(example, monkeypatch):
-    reviews = []
+    reviews, contexts, instructions = [], [], []
 
     def review(**kwargs):
         assignment = json.loads(next(
             path for path, target in kwargs["readonly"].items() if target == "/review/assignment.json"
         ).read_text())
         reviews.append(assignment["required_criteria"])
+        contexts.append(assignment["context"])
+        instructions.append(kwargs["instruction"])
         write_json(kwargs["workspace"] / "validity/verdict.json", {
             "candidate_hash": assignment["candidate_hash"], "contract_hash": assignment["contract_hash"],
             "verdict": "valid", "reasons": ["Fixture review"],
@@ -269,6 +271,12 @@ def test_the_reviewer_sees_only_candidates_that_pass_the_validity_function(examp
         assert first["observed_cost_usd"] == first["total_cost_usd"] == 0.25
         (research.workspace / "value.json").write_text('"nine"')
         second = launch.record_workspace(run)
+    # The reviewer is given exactly the text the researcher reads, and nothing else.
+    plan = json.loads((example.output / "plan.json").read_text())
+    assert contexts == [{"task_specification": plan["instructions"]}]
+    assert "- Score: `error`. Lower is better." in contexts[0]["task_specification"]
+    assert "mcp_proxy" not in json.dumps(contexts[0]) and "target.json" not in json.dumps(contexts[0])
+    assert "It adds no criteria" in instructions[0] and "Submit one candidate" not in instructions[0]
     assert second["candidates"][-1]["reasons"] == ["Use an integer"]
     assert second["starts"] == {"reviewer": 1} and reviews[0] == {"rule_1": "value.json holds one integer."}
 
@@ -297,3 +305,23 @@ def test_review_needs_rules_and_misplaced_sections_are_refused(example):
     )
     assert parsed.title == "Title" and parsed.rules == ("First rule continued.", "Second.")
     assert parsed.environment == ("No network.",) and "### Interface" in parsed.objective
+
+
+@pytest.mark.parametrize("edit", [
+    ('objective="Move value.json toward ten."', 'objective="Move value.json toward ten, as close as you can."'),
+    ('rules=["value.json holds one integer."],', 'rules=["value.json holds one integer."], environment=["The target is fixed."],'),
+])
+def test_an_objective_or_environment_edit_reaches_the_reviewer_and_changes_its_identity(example, edit):
+    settings = example.settings(f"[limits]\ncandidates = 2\n[reviewer]\n{AGENT}")
+    first = launch.open_run(example.directory, settings, example.output, IMAGE)
+    before = first.research.validity
+    first.research.close()
+    task = example.directory / "task.py"
+    task.write_text(task.read_text().replace(*edit))
+    second = launch.open_run(example.directory, settings, example.output.with_name("edited"), IMAGE)
+    after = second.research.validity
+    second.research.close()
+    assert before.criteria == after.criteria  # the Rules list did not change
+    assert before.context != after.context and edit[1].split('"')[1][:20] in json.dumps(after.context)
+    assert before.identity != after.identity
+    assert first.research.contract_hash != second.research.contract_hash

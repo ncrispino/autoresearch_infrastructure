@@ -361,6 +361,25 @@ rule is a separate check, named `rule_1`, `rule_2` and so on, and the verdict sa
 which one failed. Write rules about facts the reviewer can see in the candidate
 and the baseline. With review on, instructions that list no rules are refused.
 
+What the reviewer is given:
+
+| Given | Where |
+| --- | --- |
+| The rules, one criterion each | `required_criteria` in the assignment |
+| The task specification: the exact text the researcher read, with the Objective, the generated "What is measured" list and both Constraints lists | `context.task_specification` in the assignment |
+| The candidate's files and the baseline's files | `/review/candidate`, `/review/baseline` |
+
+The specification is there so the reviewer can tell what a rule refers to. It
+adds no criteria. The reviewer is told not to fail a candidate for a low score
+or for anything outside the listed rules, and to apply a rule and explain the
+conflict if a rule and the specification seem to disagree.
+
+The reviewer is not given the researcher's submission steps, the `context`
+files, earlier candidates, the evaluator, its data or any score. The
+specification is part of the reviewer's identity, so editing only the Objective
+or the Environment list still requires a fresh output, and an old verdict is
+never reused for a changed specification.
+
 Each review is one Harbor job with one attempt and uses one `reviewer` start. A
 candidate that fails the validity function uses none. The reviewer reads the candidate at
 `/review/candidate`, the baseline at `/review/baseline` and its assignment at

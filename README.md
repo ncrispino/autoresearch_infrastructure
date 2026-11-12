@@ -34,7 +34,8 @@ A saved version of the editable files is called a *candidate*. The unchanged
 starting files are the *baseline*. Three kinds of agent can take part:
 
 - The **researcher** reads the instructions, edits the files and submits candidates.
-- The **reviewer** judges each candidate against every rule in the instructions. Review
+- The **reviewer** judges each candidate against every rule in the instructions. It
+  reads the same instructions as the researcher, so it knows what each rule refers to. Review
   is on by default and uses the researcher's agent unless you name another.
 - The **solver** is the agent being evaluated, in tasks that evaluate an agent.
 
