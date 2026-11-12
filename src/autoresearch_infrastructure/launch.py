@@ -162,7 +162,7 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
         seed=task.seed,
         objective=task.objective,
         evaluator=task.evaluator,
-        validity=_validity(task, settings, image, ledger),
+        validity=_validity(task, settings, image, ledger, instructions),
         evaluation_config={"plan": digest(plan)},
         limits=settings.limits,
         tasks=task.cases,
@@ -193,14 +193,20 @@ def _stage_context(output: Path, files: dict) -> Path:
     return staged
 
 
-def _validity(task: Task, settings: RunSettings, image, ledger):
-    """The task's validity function, then the reviewer judging each rule the researcher was given."""
+def _validity(task: Task, settings: RunSettings, image, ledger, instructions: str):
+    """The task's validity function, then the reviewer judging each rule the researcher was given.
+
+    The reviewer also receives ``instructions``, the exact text the researcher
+    read, so that it can tell what a rule refers to. It gets nothing else: no
+    context files, no evaluator data and no submission steps.
+    """
     if settings.reviewer is not None:
-        from .review import LLMValidity
+        from .review import TASK_SPECIFICATION, LLMValidity
 
         # One check for each rule, so the verdict says which rule a candidate broke.
         rules = {f"rule_{number}": rule for number, rule in enumerate(task.instructions.rules, 1)}
-        return LLMValidity(rules, agent=settings.reviewer, image=image, ledger=ledger, precheck=task.validity)
+        return LLMValidity(rules, agent=settings.reviewer, image=image, ledger=ledger,
+                           context={TASK_SPECIFICATION: instructions}, precheck=task.validity)
     return task.validity or _unchecked
 
 

@@ -83,7 +83,8 @@ Two mechanisms decide validity, in this order:
 
 Review is on by default. The reviewer is given each rule under Constraints,
 Rules as a separate check, and its verdict names the rule a candidate broke. It
-enforces nothing else. Write every rule into the instructions, including the ones
+also reads the whole instructions the researcher read, to understand what each
+rule refers to, but it enforces only the rules. Write every rule into the instructions, including the ones
 the validity function also enforces. A rule that exists only in your head or only in a README
 is not enforced. With review on, instructions that list no rules are refused.
 
