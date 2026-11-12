@@ -605,6 +605,27 @@ coding-agent CLI comes from the `--image` container, so this base task needs
 researcher's `/context` holds the solver program interface and an example. See
 the [sum-harness example](examples/sum-harness/README.md).
 
+### Fork a trajectory and its environment
+
+`ari.ContinuationPoint` is the stable JSON contract for branching after a
+settled tool call. It stores provenance, the source rollout ID and call count,
+plus separate agent and environment states. Each state has an adapter identity,
+and the whole record has a verified `sha256:` ID and `format_version`.
+
+Use `await ari.capture_continuation(...)` only while tool execution is quiescent.
+Use `await ari.load_continuation(...)` to branch: it checks the format,
+identities and Harbor-style agent capability (`load_native_trajectory` or
+`load_atif_trajectory`) before changing either side, restores the environment,
+then calls the agent adapter's load-and-resume operation. An agent failure after
+environment restore raises `ari.ContinuationRestoreError` with
+`environment_restored=True`; restoration is not claimed to be transactional.
+
+Adapters implement `ari.AgentContinuationAdapter` and
+`ari.EnvironmentContinuationAdapter`. The two protocols are intentionally
+independent because a loaded conversation cannot reconstruct files, services,
+locks or processes. ARI supplies the contract and ordering, not an unsupported
+capability for a Harbor agent.
+
 ## Harbor evaluators
 
 The base tasks are built on two evaluators, which you can construct yourself
