@@ -7,6 +7,8 @@ name = "autoresearch-infrastructure"
 version = "0.1.0"
 description = "Optimization experiments with LLM researchers: saved candidates, checked validity, measured results"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]
