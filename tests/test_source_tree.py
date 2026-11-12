@@ -5,12 +5,14 @@ import os
 import pytest
 
 from autoresearch_infrastructure.source_tree import (
+    TASK_CONTEXT_MAX_FILE_BYTES,
     diff_trees,
     evaluation_evidence_digest,
     evidence_digest,
     evidence_snapshot,
     materialize,
     snapshot,
+    task_context_digest,
 )
 
 
@@ -143,6 +145,35 @@ def test_evaluation_evidence_digest_accepts_allowed_large_atif(tmp_path):
     (evidence / "agent-trajectory.json").write_bytes(b"x" * 8_000_001)
 
     assert len(evaluation_evidence_digest(evidence, cells=1)) == 64
+
+
+def test_task_context_digest_has_a_large_but_finite_file_bound(tmp_path):
+    context = tmp_path / "context"
+    context.mkdir()
+    history = context / "history.json.gz"
+    with history.open("wb") as stream:
+        stream.truncate(TASK_CONTEXT_MAX_FILE_BYTES + 1)
+
+    with pytest.raises(ValueError, match="digest limits"):
+        task_context_digest(context)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo"])
+def test_task_context_digest_rejects_links_and_special_files(tmp_path, kind):
+    context = tmp_path / "context"
+    context.mkdir()
+    regular = context / "regular"
+    regular.write_text("safe")
+    unsafe = context / "unsafe"
+    if kind == "symlink":
+        unsafe.symlink_to(regular)
+    elif kind == "hardlink":
+        os.link(regular, unsafe)
+    else:
+        os.mkfifo(unsafe)
+
+    with pytest.raises(ValueError, match="Links and special files"):
+        task_context_digest(context)
 
 
 def test_snapshot_and_materialize_preserve_unicode_and_diff_actual_changes(tmp_path):

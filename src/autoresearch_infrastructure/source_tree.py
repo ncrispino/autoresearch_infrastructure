@@ -55,6 +55,10 @@ IGNORED_FILES = frozenset(
     }
 )
 
+TASK_CONTEXT_MAX_FILE_BYTES = 256 * 1024 * 1024
+TASK_CONTEXT_MAX_TOTAL_BYTES = 512 * 1024 * 1024
+TASK_CONTEXT_MAX_FILES = 2_000
+
 
 def python_tree_hash(root: Path) -> str:
     """Hash regular Python source files below one trusted source root."""
@@ -209,6 +213,16 @@ def evaluation_evidence_digest(root: Path, *, cells: int) -> str:
         max_file_bytes=50_000_000,
         max_total_bytes=110_000_000 * cells,
         max_files=2_000 * cells,
+    )
+
+
+def task_context_digest(root: Path) -> str:
+    """Seal larger read-only task context under one fixed, bounded policy."""
+    return evidence_digest(
+        root,
+        max_file_bytes=TASK_CONTEXT_MAX_FILE_BYTES,
+        max_total_bytes=TASK_CONTEXT_MAX_TOTAL_BYTES,
+        max_files=TASK_CONTEXT_MAX_FILES,
     )
 
 

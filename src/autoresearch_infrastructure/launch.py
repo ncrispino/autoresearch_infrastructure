@@ -25,7 +25,7 @@ from .ledger import StartLedger
 from .persistence import digest, write_json
 from .research import BASELINE, Research
 from .search import RESEARCHER_PROTOCOL, propose, researcher_prompt
-from .source_tree import evidence_digest, python_tree_hash, snapshot
+from .source_tree import python_tree_hash, snapshot, task_context_digest
 from .task import Run, RunSettings, Task, load_task
 
 
@@ -145,16 +145,25 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
         **opened_with,
         "instructions": instructions,
         "protocol": RESEARCHER_PROTOCOL.template,
-        "context": evidence_digest(staged),
+        "context": task_context_digest(staged),
         "runtime": python_tree_hash(Path(__file__).parent),
     })
     if saved is not None and saved != plan:
         shutil.rmtree(staged)
         raise changed
-    if (output / "context").exists():
+    context = output / "context"
+    if context.exists() or context.is_symlink():
+        try:
+            context_changed = task_context_digest(context) != plan["context"]
+        except ValueError as exc:
+            shutil.rmtree(staged)
+            raise changed from exc
+        if context_changed:
+            shutil.rmtree(staged)
+            raise changed
         shutil.rmtree(staged)
     else:
-        staged.rename(output / "context")
+        staged.rename(context)
     write_json(receipt, plan)
 
     research = Research(

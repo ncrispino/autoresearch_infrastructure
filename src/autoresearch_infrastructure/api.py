@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Callable
 
 from .persistence import digest, write_json
-from .source_tree import evidence_digest, snapshot
+from .source_tree import evaluation_evidence_digest, snapshot
 from .traces import atif_metadata
 
 
@@ -283,8 +283,10 @@ class ValidityContext:
 class EvaluationContext:
     """What an evaluator is told about one evaluation.
 
-    ``task`` is the case name. ``artifacts`` is a new directory for anything worth
-    keeping, such as plots or logs; it is saved and hashed with the result.
+    ``task`` is the case name. ``artifacts`` is a new directory for evidence that
+    researchers may inspect, such as plots or logs. ``private_artifacts`` is a
+    separate trusted directory that is sealed with the result but never mounted
+    in researcher history. Direct callers may omit it for compatibility.
     """
 
     task: str
@@ -293,6 +295,21 @@ class EvaluationContext:
     candidate_hash: str
     contract_hash: str
     artifacts: Path
+    private_artifacts: Path | None = None
+
+
+def _private_artifacts_path(result_path: Path) -> Path:
+    """Map one controller-owned public result path to its private evidence peer."""
+    result_path = Path(result_path)
+    try:
+        session_root = next(
+            parent for parent in result_path.parents
+            if parent.parent.name == "sessions"
+        )
+        relative = result_path.parent.relative_to(session_root / "history")
+    except (StopIteration, ValueError) as exc:
+        raise ValueError("Evaluation result is outside session history") from exc
+    return session_root / "private" / relative / "artifacts"
 
 
 @dataclass(frozen=True)
@@ -321,7 +338,12 @@ class FunctionEvaluator:
         source_hash = digest(snapshot(candidate))
         artifacts = result_path.parent / "artifacts"
         artifacts.mkdir(exist_ok=False)
-        context = EvaluationContext(task, condition, repeat, source_hash, contract_hash, artifacts)
+        private_artifacts = _private_artifacts_path(result_path)
+        private_artifacts.mkdir(parents=True, exist_ok=False)
+        context = EvaluationContext(
+            task, condition, repeat, source_hash, contract_hash,
+            artifacts, private_artifacts,
+        )
         value = self.function(candidate, context)
         if not isinstance(value, Evaluation) or type(value.completed) is not bool:
             raise ValueError("Evaluator must return Evaluation with boolean completed")
@@ -338,7 +360,9 @@ class FunctionEvaluator:
             "completed": value.completed,
             "candidate_hash": source_hash,
             "metadata": value.metadata,
-            "artifacts_sha256": evidence_digest(artifacts),
+            "artifacts_sha256": evaluation_evidence_digest(artifacts, cells=1),
+            "private_artifacts_sha256": evaluation_evidence_digest(
+                private_artifacts, cells=1),
         }
         wrapper = {
             "task_id": task,

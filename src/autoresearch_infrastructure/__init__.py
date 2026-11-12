@@ -13,7 +13,7 @@ from .continuations import (
     load_continuation,
 )
 from .instructions import Instructions
-from .research import Research
+from .research import EvaluationArtifact, Research
 from .review import LLMValidity
 from .task import Run, RunSettings, Task
 
@@ -25,6 +25,7 @@ __all__ = [
     "ContinuationPoint",
     "ContinuationRestoreError",
     "Evaluation",
+    "EvaluationArtifact",
     "Instructions",
     "EvaluationContext",
     "EnvironmentContinuationAdapter",

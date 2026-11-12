@@ -62,7 +62,7 @@ Three more are optional:
 | --- | --- |
 | `validity` | A function that decides the constraints code can decide exactly. It runs before the reviewer. See [Validity](#validity). |
 | `cases` | Names of the cases: the fixed inputs every candidate is evaluated on. The default is one case named `default`. |
-| `context` | Read-only files for the researcher, by file name under `/context`. A `Path` is copied, a string is written as text, and any other value is saved as JSON. |
+| `context` | Read-only files for the researcher, by file name under `/context`. A `Path` is copied, a string is written as text, and any other value is saved as JSON. Context is bounded to 256 MiB per file, 512 MiB total and 2,000 regular files; symbolic links, hard-linked files and special files are rejected. |
 
 `task(run)` can read the run before it builds its evaluator. `run.settings` holds
 the parsed run settings, `run.output` is the run directory and `run.image` is the
@@ -138,7 +138,8 @@ The first command to open a run directory writes `plan.json`: the settings, the
 image, the instructions, and hashes of the task file, the context files and the
 package source. Opening the directory again after any of these changed fails
 with `Run plan changed; use a fresh output`, so editing the settings cannot reset
-a budget.
+a budget. ARI also rehashes the copied `context/` tree before reusing it, so
+tampering with a run's staged context blocks resume.
 
 The exit status is 0 on success, 1 when a recorded candidate was not measured or
 a run failed, and 2 when the task or settings could not be opened.
@@ -263,6 +264,7 @@ retries evaluations that failed or were interrupted.
 | `research.evidence(id)` | The evidence dictionary of one candidate. |
 | `research.measured(id)` | Whether a candidate is valid and fully measured. |
 | `research.candidate_files(id)` | The read-only directory of a saved candidate. |
+| `research.evaluation_artifacts(id)` | A tuple of integrity-checked `EvaluationArtifact` records for completed attempts. Each record names its case, condition, repeat, attempt number, researcher-visible `artifacts`, and optional trusted `private_artifacts`. Private evidence is sealed with the result but never mounted in `/history`. Failed or interrupted attempts are omitted; changed evidence raises `ValueError`. |
 | `research.reset_workspace(id)` | Replaces the workspace with a saved candidate's files. |
 | `research.budget_summary()` | Limits, use and remainder for candidates, evaluations, reviews and ledgers. |
 

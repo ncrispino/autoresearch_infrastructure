@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from contextlib import ExitStack
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import mean
 from types import SimpleNamespace
@@ -26,6 +26,7 @@ from .api import (
     Objective,
     Validity,
     ValidityContext,
+    _private_artifacts_path,
     code_identity,
 )
 from .ledger import StartLedger
@@ -33,12 +34,25 @@ from .lifecycle import EvaluationLifecycle
 from .persistence import digest, write_json
 from .review import LLMValidity
 from .snapshots import record_snapshot
-from .source_tree import evidence_digest, materialize, python_tree_hash, snapshot
+from .source_tree import evaluation_evidence_digest, materialize, python_tree_hash, snapshot
 from .validity import ValidityVerdict
 
 _SESSION = "research"
 _SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}")
 BASELINE = "candidate-0001"
+
+
+@dataclass(frozen=True)
+class EvaluationArtifact:
+    """Integrity-checked public and optional trusted-private attempt evidence."""
+
+    candidate_id: str
+    task_id: str
+    condition: str
+    repeat: int
+    attempt: int
+    artifacts: Path
+    private_artifacts: Path | None = None
 
 
 class Research(EvaluationLifecycle):
@@ -250,6 +264,91 @@ class Research(EvaluationLifecycle):
     def candidate_files(self, candidate_id: str) -> Path:
         """The read-only snapshot of a saved candidate, checked against its hash."""
         return self._verified_candidate_path(_SESSION, candidate_id)
+
+    def evaluation_artifacts(self, candidate_id: str) -> tuple[EvaluationArtifact, ...]:
+        """Return completed attempt artifacts only after verifying their saved evidence.
+
+        The paths come from controller state, but are accepted only when they match
+        the candidate's canonical evaluation layout and the persisted result,
+        candidate snapshot, and complete artifact tree still match their hashes.
+        Interrupted and failed attempts are not returned.
+        """
+        self._require_owner()
+        if candidate_id not in self.candidates:
+            raise ValueError("Unknown candidate")
+        self.candidate_files(candidate_id)
+        evidence = self.evidence(candidate_id)
+        if not evidence:
+            return ()
+        found: list[EvaluationArtifact] = []
+        with self._lock:
+            for key, cell in sorted(evidence.get("cells", {}).items()):
+                try:
+                    task_id = cell["task_id"]
+                    condition = cell["condition"]
+                    repeat = cell["repeat"]
+                except (KeyError, TypeError) as exc:
+                    raise ValueError("Saved evaluation or artifacts changed") from exc
+                if self._cell_key(task_id, condition, repeat) != key:
+                    raise ValueError("Saved evaluation or artifacts changed")
+                completed_attempts = [
+                    attempt
+                    for attempt in cell.get("trial_starts", [])
+                    if attempt.get("status") == "completed"
+                ]
+                if completed_attempts and cell.get("status") != "completed":
+                    raise ValueError("Saved evaluation or artifacts changed")
+                numbers = [attempt.get("number") for attempt in cell.get("trial_starts", [])]
+                if len(numbers) != len(set(numbers)):
+                    raise ValueError("Saved evaluation or artifacts changed")
+                for attempt in cell.get("trial_starts", []):
+                    if attempt.get("status") != "completed":
+                        continue
+                    number = attempt.get("number")
+                    if type(number) is not int or number < 1:
+                        raise ValueError("Saved evaluation or artifacts changed")
+                    expected = (
+                        self._candidate_dir(_SESSION, candidate_id)
+                        / "evaluations"
+                        / self.contract_hash
+                        / "cells"
+                        / key
+                        / f"trial-start-{number}"
+                        / "result.json"
+                    )
+                    relative = attempt.get("result_path")
+                    if (
+                        not isinstance(relative, str)
+                        or Path(relative).is_absolute()
+                        or ".." in Path(relative).parts
+                        or self.output / relative != expected
+                    ):
+                        raise ValueError("Saved evaluation or artifacts changed")
+                    saved = self._load_trial_start_result(
+                        expected, task_id, condition, repeat, self.contract_hash
+                    )
+                    if (
+                        saved is None
+                        or saved != attempt.get("result")
+                        or saved != cell.get("result")
+                    ):
+                        raise ValueError("Saved evaluation or artifacts changed")
+                    found.append(
+                        EvaluationArtifact(
+                            candidate_id=candidate_id,
+                            task_id=task_id,
+                            condition=condition,
+                            repeat=repeat,
+                            attempt=number,
+                            artifacts=expected.parent / "artifacts",
+                            private_artifacts=(
+                                _private_artifacts_path(expected)
+                                if saved.get("private_artifacts_sha256") is not None
+                                else None
+                            ),
+                        )
+                    )
+        return tuple(found)
 
     def reset_workspace(self, files: str | dict[str, str]) -> None:
         """Replace the workspace with a saved candidate's files or an exact file mapping."""
@@ -544,8 +643,17 @@ class Research(EvaluationLifecycle):
             candidate_root = next(p for p in path.parents if p.name.startswith("candidate-"))
             if digest(snapshot(candidate_root / "snapshot")) != result["candidate_hash"]:
                 return None
-            if evidence_digest(path.parent / "artifacts") != result["artifacts_sha256"]:
+            if (evaluation_evidence_digest(path.parent / "artifacts", cells=1)
+                    != result["artifacts_sha256"]):
                 return None
+            private_digest = result.get("private_artifacts_sha256")
+            if private_digest is not None:
+                if (
+                    not isinstance(private_digest, str)
+                    or evaluation_evidence_digest(
+                        _private_artifacts_path(path), cells=1) != private_digest
+                ):
+                    return None
             if "trajectory" in result:
                 wrapper = json.loads(path.with_name("trajectory.json").read_text())
                 if wrapper.get("solver_trajectory") != result["trajectory"]:

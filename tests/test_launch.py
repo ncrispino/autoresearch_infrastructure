@@ -102,6 +102,33 @@ def test_check_freezes_the_plan_and_starts_nothing(example):
     assert (example.output / "starts.json").read_bytes() == ledger
 
 
+def test_large_context_is_checked_and_context_tampering_blocks_resume(example):
+    history = example.directory / "history.json.gz"
+    with history.open("wb") as stream:
+        stream.truncate(8 * 1024 * 1024 + 1)
+    task_file = example.directory / "task.py"
+    task_file.write_text(task_file.read_text().replace(
+        'context={"target.json": {"target": 10}, "note.txt": "Read-only note"},',
+        'context={"history.json.gz": Path("history.json.gz")},',
+    ))
+    settings = example.settings("reviewer = false\n")
+
+    run = launch.open_run(example.directory, settings, example.output, None)
+    with run.research:
+        assert launch.check_run(run)["status"] == "checked"
+    staged = example.output / "context/history.json.gz"
+    assert staged.stat().st_size == 8 * 1024 * 1024 + 1
+    resumed = launch.open_run(example.directory, settings, example.output, None)
+    with resumed.research:
+        assert launch.check_run(resumed)["status"] == "checked"
+
+    with staged.open("r+b") as stream:
+        stream.write(b"tampered")
+    with pytest.raises(ValueError, match="plan changed"):
+        launch.open_run(example.directory, settings, example.output, None)
+    assert not any(path.name.startswith(".context-") for path in example.output.iterdir())
+
+
 @pytest.mark.parametrize("change", ["settings", "prompt", "image"])
 def test_a_changed_task_settings_or_image_needs_a_fresh_output(example, change):
     settings = example.settings(f"reviewer = false\n[limits]\ncandidates = 2\n[researcher]\n{AGENT}")

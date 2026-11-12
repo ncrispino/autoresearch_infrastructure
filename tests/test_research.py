@@ -272,6 +272,100 @@ def test_candidate_and_artifact_tampering_rejected_on_repeat(tmp_path):
         research.record_candidate(result["candidate_id"])
 
 
+def test_completed_evaluation_artifacts_are_verified_before_exposure(tmp_path):
+    research = make(tmp_path)
+    result = submit(research, "2", total_repeats=2)
+    artifacts = research.evaluation_artifacts(result["candidate_id"])
+    assert [(item.task_id, item.condition, item.repeat, item.attempt)
+            for item in artifacts] == [
+        ("default", "default", 1, 1),
+        ("default", "default", 2, 1),
+    ]
+    assert all(item.candidate_id == result["candidate_id"] for item in artifacts)
+    assert [item.artifacts.joinpath("receipt.txt").read_text() for item in artifacts] == [
+        "value='2' context.repeat=1", "value='2' context.repeat=2",
+    ]
+
+    artifacts[0].artifacts.joinpath("receipt.txt").write_text("tampered")
+    with pytest.raises(ValueError, match="evaluation or artifacts changed"):
+        research.evaluation_artifacts(result["candidate_id"])
+
+
+def test_private_evaluation_artifacts_are_sealed_but_not_in_researcher_history(tmp_path):
+    def evaluate_with_private_evidence(path, context):
+        assert context.private_artifacts is not None
+        (context.artifacts / "public.txt").write_text("visible")
+        (context.private_artifacts / "secret.txt").write_text("trusted-only")
+        value = float((path / "number").read_text())
+        return Evaluation({QUALITY: value, COST: value})
+
+    research = make(tmp_path, evaluator=evaluate_with_private_evidence)
+    result = submit(research, "2")
+    artifact, = research.evaluation_artifacts(result["candidate_id"])
+    assert artifact.private_artifacts is not None
+    assert artifact.private_artifacts.joinpath("secret.txt").read_text() == "trusted-only"
+    assert not artifact.private_artifacts.is_relative_to(research.root / "history")
+    assert not list((research.root / "history").rglob("secret.txt"))
+    assert "trusted-only" not in "".join(
+        path.read_text(errors="ignore")
+        for path in (research.root / "history").rglob("*")
+        if path.is_file()
+    )
+
+    artifact.private_artifacts.joinpath("secret.txt").write_text("tampered")
+    with pytest.raises(ValueError, match="evaluation or artifacts changed"):
+        research.evaluation_artifacts(result["candidate_id"])
+
+
+def test_evaluation_artifact_envelope_accepts_large_rollout_files(tmp_path):
+    def evaluate_large_rollout(path, context):
+        context.artifacts.joinpath("rollout.json").write_bytes(b"x" * 8_000_001)
+        assert context.private_artifacts is not None
+        context.private_artifacts.joinpath("corpus.jsonl").write_text("private\n")
+        value = float((path / "number").read_text())
+        return Evaluation({QUALITY: value, COST: value})
+
+    research = make(tmp_path, evaluator=evaluate_large_rollout)
+    result = submit(research, "2")
+    artifact, = research.evaluation_artifacts(result["candidate_id"])
+    assert artifact.artifacts.joinpath("rollout.json").stat().st_size == 8_000_001
+
+
+def test_evaluation_artifacts_reject_forged_paths_and_skip_failed_attempts(tmp_path):
+    fail = {True}
+
+    def flaky(path, context):
+        if fail:
+            raise RuntimeError("retryable")
+        return evaluate(path, context)
+
+    research = make(tmp_path, evaluator=flaky)
+    first = submit(research, "2")
+    assert research.evaluation_artifacts(first["candidate_id"]) == ()
+    fail.clear()
+    retried = research.record_candidate(first["candidate_id"])
+    artifacts = research.evaluation_artifacts(first["candidate_id"])
+    assert len(artifacts) == 1 and artifacts[0].attempt == 2
+
+    cell = retried["evidence"]["cells"]["default/default/1"]
+    cell["status"] = "missing"
+    research._save_state()
+    with pytest.raises(ValueError, match="evaluation or artifacts changed"):
+        research.evaluation_artifacts(first["candidate_id"])
+    cell["status"] = "completed"
+
+    cell["trial_starts"][0]["number"] = 2
+    research._save_state()
+    with pytest.raises(ValueError, match="evaluation or artifacts changed"):
+        research.evaluation_artifacts(first["candidate_id"])
+    cell["trial_starts"][0]["number"] = 1
+
+    cell["trial_starts"][-1]["result_path"] = "../outside.json"
+    research._save_state()
+    with pytest.raises(ValueError, match="evaluation or artifacts changed"):
+        research.evaluation_artifacts(first["candidate_id"])
+
+
 def test_example_atif_is_embedded_and_html_escaped(tmp_path):
     def traced(path, context):
         atif = context.artifacts / "trajectory.json"
