@@ -1,0 +1,6 @@
+# Run settings without agents: you, or demo.py, make the proposals.
+reviewer = false     # the task's check alone decides validity
+
+[limits]
+candidates = 5
+evaluations = 4

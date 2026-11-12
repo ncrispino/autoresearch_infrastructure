@@ -1,0 +1,34 @@
+# Run settings for one Harbor researcher proposal.
+# A reviewer judges each candidate against the task's instructions. It uses the
+# researcher's agent unless you add a [reviewer] table, as this file does.
+
+[limits]             # the baseline plus one proposal
+candidates = 2
+evaluations = 2
+
+# [researcher] and [reviewer] are ordinary Harbor agent configurations.
+[researcher]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 300
+override_setup_timeout_sec = 60
+[researcher.kwargs]
+record_terminal_session = false
+max_turns = 6
+enable_summarize = false
+[researcher.kwargs.llm_kwargs]
+max_tokens = 2048
+num_retries = 0
+
+[reviewer]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 120
+override_setup_timeout_sec = 60
+[reviewer.kwargs]
+record_terminal_session = false
+max_turns = 4
+enable_summarize = false
+[reviewer.kwargs.llm_kwargs]
+max_tokens = 2048
+num_retries = 0

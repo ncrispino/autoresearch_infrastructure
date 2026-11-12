@@ -1,0 +1,84 @@
+status = "implemented-preflight-required"
+runnable = true
+task_id = "spreadsheet-harness-search"
+solver_model = "gpt-6-luna"
+solver_provider = "openrouter"
+output = "/tmp/ari-sheets-harness-search"
+max_new_candidates = 6
+max_researcher_invocations = 8
+max_reviewer_invocations = 8
+max_reference_trial_starts = 22
+max_solver_trial_starts = 66
+max_harness_session_starts = 66
+max_sessions_per_trial = 1
+max_parallel_trials = 1
+solver_timeout_seconds = 180
+research_guidance = """
+Develop reusable spreadsheet-editing workflows, not case-specific answers. Inspect all
+relevant public workbook data, determine complete source ranges and preserve requested
+output shape, formulas, formatting and files. The documented benchmark adapter uses
+LibreOffice recalculation: consider formula serialization and supported functions.
+Compare mechanisms such as structured inspection, efficient batched edits, explicit
+range coverage, and bounded output checks. These are suggestions, not measured fixes.
+Keep the existing inference settings and one-session ceiling; improve orchestration,
+skills, prompts or bounded hooks instead. Never access answers or verifier internals.
+"""
+
+[screen]
+cases = 6
+repeats = 1
+candidates_including_baseline = 7
+# 42 planned starts plus six spare starts; retries remain charged.
+max_solver_trial_starts = 48
+
+[confirmation]
+cases = 4
+repeats = 2
+candidates_including_baseline = 2
+# 16 planned starts plus two spare starts.
+max_solver_trial_starts = 18
+
+[benchmark]
+name = "spreadsheetbench-verified"
+version = "1.0"
+revision = "0ad7209b09780e78c6c80f194e49e353191be1cc"
+source = "https://github.com/harbor-framework/harbor-datasets"
+source_adapter = "https://github.com/harbor-framework/harbor/tree/main/adapters/spreadsheetbench-verified"
+screen_task_ids = ["42515", "280-17", "269-43", "50631", "7665", "42902"]
+confirmation_task_ids = ["192-22", "49036", "34033", "53994"]
+confirmation_selection = "Four smallest SHA256(seed + ':' + task_id), excluding all nine prior calibration cases, before outcomes"
+confirmation_selection_seed = "ari-spreadsheet-harness-confirm-v1"
+excluded_confirmation_task_ids = ["10452", "105-24", "10747", "269-43", "280-17", "42515", "42902", "50631", "7665"]
+negative_control_task_ids = ["42515"]
+task_ids_pinned = true
+reward = "upstream-verifier"
+preserve_task_definitions = true
+preserve_verifier = true
+
+[harness]
+backend = "custom-harbor-agent"
+candidate = "shared-program-skills-hooks"
+capability_interface = "harbor-task-terminal-filesystem"
+benchmark_specific_runtime_branches = false
+include_solver_tokens = true
+
+[validity]
+scope = "Edit only the generic program, prompts, skills and bounded callbacks. Preserve benchmark-harness program ID, original tasks and verifier. Model/provider, runtime reasoning effort, inference budgets, permissions and deadlines are frozen, including call-site overrides. Public workbook tooling and documented LibreOffice compatibility workflows are allowed."
+generality = "Use public instructions and observations. No task IDs, expected answers, exact-question lookup, hidden tests, reference assets, verifier internals, per-case exceptions or reward manipulation. Task-type-dependent workflows are allowed when they perform the legitimate requested transformation."
+accounting = "All inference uses runtime.run_harness, with at most one session per trial. No helpers, retries, native delegation, direct APIs or new external dependencies. All task effects use the supplied exec capability; do not evade its hooks, bounds or accounting."
+
+# Standard Harbor reviewer; publisher-qualified OpenRouter routing.
+[reviewer]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 240
+[reviewer.kwargs]
+record_terminal_session = false
+
+# Standard Harbor researcher, configured independently of the solver and reviewer.
+[researcher]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 7200
+[researcher.kwargs]
+record_terminal_session = false

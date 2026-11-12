@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>Research evidence</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script>
+    const requested = new URL(location.href).searchParams.get("theme");
+    let saved;
+    try { saved = localStorage.getItem("ari-theme"); } catch {}
+    document.documentElement.dataset.theme = ["light", "dark"].includes(requested)
+      ? requested : ["light", "dark"].includes(saved)
+        ? saved : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  </script>
+  <style>
+    :root {
+      font: 15px system-ui;
+      --ink: #172a40; --bg: #ffffff; --panel: #f5f7fa;
+      --muted: #52677e; --line: #cfd8e3; --accent: #275ed2;
+      --valid: #23744c; --invalid: #b33440; --unreviewed: #76849a;
+      color: var(--ink); background: var(--bg); color-scheme: light;
+    }
+    :root[data-theme="dark"] {
+      --ink: #dce3ec; --bg: #111722; --panel: #192332;
+      --muted: #aab8cb; --line: #344052; --accent: #9bbfff;
+      --valid: #8be6bd; --invalid: #ffb4a9; --unreviewed: #8594aa;
+      color-scheme: dark;
+    }
+    body {
+      margin: auto;
+      padding: 1.5rem;
+      max-width: 1500px;
+    }
+    h1 {
+      font-size: 25px;
+    }
+    h2 {
+      font-size: 19px;
+    }
+    p, h1, h2, h3 { overflow-wrap: anywhere; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+    }
+    td,
+    th {
+      text-align: left;
+      padding: 0.7rem;
+      border-bottom: 1px solid var(--line);
+    }
+    button,
+    select {
+      font: inherit;
+      padding: 0.5rem;
+      margin: 0.3rem;
+    }
+    button {
+      cursor: pointer;
+    }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: var(--panel);
+      padding: 1rem;
+      border-radius: 6px;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .good {
+      color: var(--valid);
+    }
+    .bad {
+      color: var(--invalid);
+    }
+    details {
+      margin: 1rem 0;
+    }
+    a {
+      color: var(--accent);
+    }
+    .artifact-preview {
+      margin: 1rem 0;
+    }
+    .artifact-preview img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    .artifact-preview figcaption {
+      margin-top: 0.4rem;
+      color: var(--muted);
+    }
+    .metric-list {
+      display: grid;
+      gap: 0.3rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-list div {
+      overflow-wrap: anywhere;
+    }
+    header { display: flex; align-items: center; justify-content: space-between; }
+    #theme-toggle { border: 0; background: transparent; color: var(--ink); font-size: 24px; }
+    .table-scroll { overflow-x: auto; max-width: 100%; }
+    #progress { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 2rem; margin: 1.5rem 0; }
+    #progress > section { min-width: 0; border-top: 1px solid var(--line); }
+    .chart-controls, .outcome-counts { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
+    .chart-controls select { max-width: 100%; }
+    #metric-chart svg { display: block; width: 100%; height: auto; }
+    #metric-chart svg text { font: 12px system-ui; fill: var(--muted); }
+    .chart-axis { stroke: var(--line); stroke-width: 1; }
+    .metric-line { fill: none; stroke: var(--accent); stroke-width: 2; }
+    .metric-point { fill: var(--accent); stroke: var(--bg); stroke-width: 2; cursor: pointer; }
+    .metric-point.selected, .metric-point:focus { stroke: var(--ink); stroke-width: 3; outline: none; }
+    .outcome-bar { display: flex; height: 16px; margin: 1rem 0; background: var(--panel); }
+    .outcome-bar > span { min-width: 0; }
+    .valid { color: var(--valid); --outcome: var(--valid); }
+    .invalid { color: var(--invalid); --outcome: var(--invalid); }
+    .unreviewed { color: var(--unreviewed); --outcome: var(--unreviewed); }
+    .outcome-bar > span { background: var(--outcome); }
+    .version-outcomes { display: flex; flex-wrap: wrap; gap: .4rem; margin: 1rem 0; }
+    .version-outcomes button { margin: 0; min-width: 2rem; background: transparent; border: 1px solid var(--outcome); border-top-width: 4px; }
+    @media (max-width: 850px) { #progress { grid-template-columns: 1fr; } }
+    @media (max-width: 450px) { body { padding: .75rem; } }
+  </style>
+  <header><h1>Research evidence</h1><button id="theme-toggle" aria-label="Toggle color theme" title="Toggle color theme">◐</button></header>
+  <div id="summary"></div>
+  <div id="warnings"></div>
+  <label
+    >Session
+    <select id="session"></select
+  ></label>
+  <div id="candidates"></div>
+  <main id="detail"></main>
+  <script>
+    const embedded = __RESEARCH_DATA__,
+      trajectories = embedded?.snapshot_trajectories || {};
+    const el = (tag, text) => {
+      const n = document.createElement(tag);
+      if (text !== undefined) n.textContent = text;
+      return n;
+    };
+    function table(headers, rows) {
+      const t = el("table"),
+        h = el("tr");
+      headers.forEach((x) => h.append(el("th", x)));
+      t.append(h);
+      rows.forEach((values) => {
+        const row = el("tr");
+        values.forEach((v) => {
+          const td = el("td");
+          td.append(
+            v instanceof Node
+              ? v
+              : document.createTextNode(v == null ? "—" : String(v)),
+          );
+          row.append(td);
+        });
+        t.append(row);
+      });
+      const wrap = el("div");
+      wrap.className = "table-scroll";
+      wrap.append(t);
+      return wrap;
+    }
+    function json(value) {
+      return el("pre", JSON.stringify(value, null, 2));
+    }
+    function metricList(metrics) {
+      const list = el("div");
+      list.className = "metric-list";
+      for (const [name, value] of Object.entries(metrics || {})) {
+        const rounded = typeof value === "number" && Number.isFinite(value)
+          ? Number(value.toPrecision(6)) : value;
+        const row = el("div", name + ": " + (rounded !== value ? "≈" : "") + rounded);
+        row.title = "Full value: " + name + " = " + JSON.stringify(value);
+        list.append(row);
+      }
+      if (!list.childNodes.length) list.textContent = "—";
+      return list;
+    }
+    const numeric = value => typeof value === "number" && Number.isFinite(value);
+    const currentEvidence = (s, c) => c.evidence.find(e => e.contract === s.contract_hash);
+    function openCandidate(s, c) {
+      showCandidate(s, c);
+      const detail = document.querySelector("#detail");
+      detail.tabIndex = -1;
+      detail.scrollIntoView({ block: "start" });
+      detail.focus({ preventScroll: true });
+    }
+    function svgNode(tag, attributes, text) {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [name, value] of Object.entries(attributes || {})) node.setAttribute(name, value);
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+    const chartNumber = value => value && (Math.abs(value) < .0001 || Math.abs(value) >= 1e6)
+      ? value.toExponential(2) : Number(value.toPrecision(4)).toString();
+    let resizeProgress = () => {};
+    window.addEventListener("resize", () => resizeProgress());
+    function drawMetric(s, choice, axis, target) {
+      target.replaceChildren();
+      const measured = s.candidates.flatMap((candidate, index) => {
+        const evidence = currentEvidence(s, candidate);
+        const value = choice.score ? evidence?.score : evidence?.metrics?.[choice.name];
+        return evidence?.validity === "valid" && evidence.evaluation === "completed" && numeric(value)
+          ? [{ candidate, evidence, value, version: index + 1 }] : [];
+      });
+      const points = axis === "time"
+        ? measured.filter(p => numeric(p.evidence.timing?.finished_at)) : measured;
+      const missingTimes = measured.length - points.length;
+      if (!points.length) target.append(el("p", "No completed measurements" + (axis === "time" ? " with recorded times." : " for this metric.")));
+      else {
+        const width = Math.max(320, target.clientWidth || 640), right = width - 20;
+        const svg = svgNode("svg", { viewBox: `0 0 ${width} 250`, role: "group", "aria-label": "Metric progress" });
+        const origin = axis === "time" ? Math.min(...points.map(p => p.evidence.timing.finished_at)) : 0;
+        points.forEach(p => { p.x = axis === "time" ? p.evidence.timing.finished_at - origin : p.version; });
+        points.sort((a, b) => a.x - b.x);
+        const xMin = axis === "time" ? points[0].x : 1;
+        const xMax = axis === "time" ? points.at(-1).x : s.candidates.length;
+        const scale = points.reduce((n, p) => Math.max(n, Math.abs(p.value)), 1);
+        const low = points.reduce((n, p) => Math.min(n, p.value / scale), Infinity);
+        const high = points.reduce((n, p) => Math.max(n, p.value / scale), -Infinity);
+        const padding = high === low ? .05 : (high - low) * .08;
+        const x = value => xMax === xMin ? (70 + right) / 2 : 70 + (value - xMin) / (xMax - xMin) * (right - 70);
+        const y = value => 200 - (value / scale - low + padding) / (high - low + 2 * padding) * 165;
+        svg.append(svgNode("line", { x1: 70, y1: 200, x2: right, y2: 200, class: "chart-axis" }));
+        const ticks = low === high ? [low] : [low, (low + high) / 2, high];
+        for (const tick of ticks) {
+          const value = tick * scale;
+          svg.append(svgNode("line", { x1: 70, y1: y(value), x2: right, y2: y(value), class: "chart-axis" }));
+          svg.append(svgNode("text", { x: 62, y: y(value) + 4, "text-anchor": "end" }, chartNumber(value)));
+        }
+        const xTicks = [...new Set([xMin, xMax])];
+        for (const tick of xTicks) {
+          const label = axis === "time" ? (tick < 60 ? chartNumber(tick) + "s" : chartNumber(tick / 60) + "m") : tick;
+          svg.append(svgNode("text", { x: x(tick), y: 220, "text-anchor": "middle" }, label));
+        }
+        svg.append(svgNode("text", { x: (70 + right) / 2, y: 245, "text-anchor": "middle" },
+          axis === "time" ? "Time since first completed measurement" : "Saved version"));
+        svg.append(svgNode("polyline", { points: points.map(p => `${x(p.x)},${y(p.value)}`).join(" "), class: "metric-line" }));
+        for (const point of points) {
+          const selected = s.selected?.[s.contract_hash] === point.candidate.id;
+          const label = "Version " + point.version + " · " + point.candidate.id + ": " + choice.name + " = " + point.value +
+            (selected ? " · selected" : "") + (point.evidence.feasible === false ? " · metric limit failed" : "");
+          const circle = svgNode("circle", { cx: x(point.x), cy: y(point.value), r: 5,
+            class: "metric-point" + (selected ? " selected" : ""), tabindex: 0, role: "button",
+            "data-candidate": point.candidate.id, "aria-label": label });
+          circle.append(svgNode("title", {}, label));
+          circle.onclick = () => openCandidate(s, point.candidate);
+          circle.onkeydown = event => {
+            if (["Enter", " "].includes(event.key)) { event.preventDefault(); openCandidate(s, point.candidate); }
+          };
+          svg.append(circle);
+        }
+        target.append(svg);
+      }
+      const note = el("p", "Current setup; latest completed result per version. Missing results are omitted, not zero. " +
+        "Outlined point: selected. Click a point for evidence." +
+        (missingTimes ? ` ${missingTimes} measurement(s) lack timestamps.` : ""));
+      note.className = "muted";
+      target.append(note);
+    }
+    function progress(s, target) {
+      const wrap = el("div"); wrap.id = "progress";
+      const metric = el("section"), outcomes = el("section");
+      metric.append(el("h3", "Metric progress"));
+      const choices = (s.metrics || []).map(m => ({ name: m.name, direction: m.direction }));
+      for (const c of s.candidates) for (const name of Object.keys(currentEvidence(s, c)?.metrics || {})) {
+        if (!choices.some(m => m.name === name)) choices.push({ name });
+      }
+      if (s.objective_policy) choices.push({ name: "Objective score", direction: s.objective_policy.direction, score: true });
+      const controls = el("div"); controls.className = "chart-controls";
+      const select = el("select"); select.id = "progress-metric";
+      choices.forEach((choice, index) => {
+        const option = el("option", choice.name); option.value = index; select.append(option);
+      });
+      const primary = s.objective_policy?.score?.metric;
+      const preferred = choices.findIndex(m => primary ? !m.score && m.name === primary : m.score);
+      if (preferred >= 0) select.value = preferred;
+      const metricLabel = el("label", "Metric "); metricLabel.append(select);
+      const axis = el("select"); axis.id = "progress-axis";
+      for (const [value, text] of [["version", "Version order"], ["time", "Elapsed time"]]) {
+        const option = el("option", text); option.value = value; axis.append(option);
+      }
+      const axisLabel = el("label", "Show by "); axisLabel.append(axis);
+      controls.append(metricLabel, axisLabel);
+      const direction = el("p"), plot = el("div"); plot.id = "metric-chart";
+      const update = () => {
+        const choice = choices[select.value];
+        direction.textContent = choice?.direction === "min" ? "Lower is better" : choice?.direction === "max" ? "Higher is better" : "Recorded values";
+        if (choice) drawMetric(s, choice, axis.value, plot);
+        else plot.replaceChildren(el("p", "No recorded metrics yet."));
+      };
+      select.onchange = axis.onchange = update;
+      metric.append(controls, direction, plot);
+      outcomes.id = "proposal-outcomes";
+      outcomes.append(el("h3", "Proposal validity"));
+      const proposals = s.role === "research" ? s.candidates.slice(1) : s.candidates;
+      const counts = { valid: 0, invalid: 0, unreviewed: 0 };
+      const rows = proposals.map(c => {
+        const verdict = currentEvidence(s, c)?.validity;
+        const status = ["valid", "invalid"].includes(verdict) ? verdict : "unreviewed";
+        counts[status]++; return { c, status };
+      });
+      const labels = { valid: "Valid", invalid: "Invalid", unreviewed: "No verdict" };
+      const summary = el("div"); summary.className = "outcome-counts";
+      const bar = el("div"); bar.className = "outcome-bar";
+      for (const [status, count] of Object.entries(counts)) {
+        const text = el("span", `${labels[status]}: ${count}`); text.className = status; text.dataset.outcome = status; summary.append(text);
+        if (count) { const segment = el("span"); segment.className = status; segment.style.width = 100 * count / proposals.length + "%"; segment.title = text.textContent; bar.append(segment); }
+      }
+      outcomes.append(summary, bar);
+      const reviewed = counts.valid + counts.invalid;
+      outcomes.append(el("p", reviewed
+        ? `${chartNumber(100 * counts.valid / reviewed)}% of reviewed proposals valid`
+        : "No reviewed proposals yet."));
+      const versions = el("div"); versions.className = "version-outcomes";
+      rows.forEach(({ c, status }, i) => {
+        const button = el("button", i + (s.role === "research" ? 2 : 1));
+        button.className = status; button.dataset.candidate = c.id;
+        button.title = button.ariaLabel = c.id + " · " + labels[status];
+        button.onclick = () => openCandidate(s, c); versions.append(button);
+      });
+      outcomes.append(proposals.length ? versions : el("p", "No new versions yet."));
+      const scope = el("p", (s.role === "research" ? "Starting version excluded. " : "") + "Valid means rules passed, not selected.");
+      scope.className = "muted"; outcomes.append(scope);
+      wrap.append(metric, outcomes); target.append(wrap);
+      update(); resizeProgress = update;
+    }
+    function trace(metadata) {
+      const wrap = el("details");
+      wrap.append(
+        el(
+          "summary",
+          "ATIF trajectory · " +
+            (metadata.session_id ||
+              metadata.native_session_id ||
+              metadata.sha256 ||
+              "evidence"),
+        ),
+      );
+      const saved = trajectories[metadata.saved_key || metadata.viewer_url];
+      if (saved) wrap.append(el("pre", saved.raw));
+      else if (metadata.viewer_url) {
+        const a = el("a", "Open Harbor trajectory");
+        a.href = metadata.viewer_url;
+        wrap.append(a);
+      } else wrap.append(json(metadata));
+      return wrap;
+    }
+    let data;
+    function showCandidate(s, c) {
+      const completionLabel = s.role === "research" ? "Measurement completed" : "Task completed";
+      const d = document.querySelector("#detail");
+      d.replaceChildren(
+        el("h2", c.id + " · " + c.status),
+        el(
+          "p",
+          "Source " +
+            (c.source_hash || "unavailable") +
+            " · parent " +
+            (c.parent_id || "seed"),
+        ),
+      );
+      if (c.proposal) d.append(json(c.proposal));
+      const chooser = el("select");
+      c.comparisons.forEach((x, i) => {
+        const o = el("option", x.base_id + (x.is_parent ? " (parent)" : ""));
+        o.value = i;
+        o.selected = x.is_default;
+        chooser.append(o);
+      });
+      const patch = el("pre");
+      const change = () => {
+        patch.textContent =
+          c.comparisons[chooser.value]?.diff_patch ??
+          "Verified comparison unavailable";
+      };
+      chooser.onchange = change;
+      change();
+      d.append(el("h2", "Compare candidate"), chooser, patch);
+      for (const e of c.evidence) {
+        d.append(
+          el("h2", "Evaluation · " + e.evaluation),
+          el(
+            "p",
+            "Validity: " + e.validity + " · repeats: " + (e.total_repeats || 0),
+          ),
+          json(e.validity_record),
+        );
+        d.append(table(["Metric", "Value"], Object.entries(e.metrics || {})));
+        d.append(el("p", "Metrics used by objective: " + (e.objective_metrics || []).join(", ")));
+        for (const failure of e.constraint_failures || []) d.append(el("p", "Limit failed: " + failure));
+        d.append(
+          el(
+            "p",
+            "Score: " + JSON.stringify(e.score) + " · selection key: " +
+              JSON.stringify(e.objective) +
+              " · feasible: " +
+              e.feasible +
+              " · " + completionLabel.toLowerCase() + ": " +
+              e.task_completed,
+          ),
+        );
+        d.append(
+          table(
+            [
+              "Task",
+              "Condition",
+              "Repeat",
+              "Status",
+              "Metrics",
+              completionLabel,
+              "Starts",
+            ],
+            e.cells.map((cell) => [
+              cell.task,
+              cell.condition,
+              cell.repeat,
+              cell.status,
+              metricList(cell.result?.metrics),
+              cell.result?.completed,
+              cell.trial_starts.length,
+            ]),
+          ),
+        );
+        for (const cell of e.cells) {
+          for (const a of cell.trial_starts) {
+            for (const artifact of a.artifact_images || []) {
+              const figure = el("figure"), image = el("img");
+              figure.className = "artifact-preview";
+              image.alt = artifact.path;
+              // SVG stays an isolated image document: never inline it into this DOM.
+              image.src = artifact.data_url;
+              figure.append(image, el("figcaption", cell.key + " · " + artifact.path));
+              d.append(figure);
+            }
+            const details = el("details");
+            const { artifact_images, ...attempt } = a;
+            details.append(
+              el(
+                "summary",
+                cell.key + " · attempt " + a.number + " · " + a.status,
+              ),
+              json(attempt),
+            );
+            d.append(details);
+            if (a.trajectory) d.append(trace(a.trajectory));
+            for (const nested of a.solver_sessions || [])
+              if (nested.trajectory) d.append(trace(nested.trajectory));
+          }
+        }
+        if (e.validator_trajectory) d.append(trace(e.validator_trajectory));
+      }
+      for (const t of s.researcher_trajectories || []) d.append(trace(t));
+    }
+    function showSession() {
+      const s = data.sessions[document.querySelector("#session").value],
+        target = document.querySelector("#candidates");
+      if (!s) return;
+      target.replaceChildren(el("h2", s.assignment || s.id));
+      if (s.objective_policy && s.objective_policy.description !== (s.assignment || s.id)) {
+        target.append(el("p", s.objective_policy.description));
+      }
+      progress(s, target);
+      if (s.objective_policy) {
+        const definitions = el("details");
+        definitions.append(el("summary", "Objective and metric definitions"), json(s.objective_policy));
+        definitions.append(
+          table(
+            ["Measurement", "Preference", "Minimum", "Maximum", "Limits apply to"],
+            (s.metrics || []).map((m) => [
+              m.name,
+              m.direction,
+              m.minimum,
+              m.maximum,
+              m.bounds_scope === "mean" ? "Mean" : "Each evaluation",
+            ]),
+          ),
+        );
+        target.append(definitions);
+      }
+      const rows = s.candidates.map((c, index) => {
+        const b = el("button", c.id);
+        b.onclick = () => openCandidate(s, c);
+        const e = currentEvidence(s, c);
+        return [
+          index + 1,
+          b,
+          c.parent_id || "seed",
+          c.status,
+          e?.validity,
+          e?.evaluation,
+          e?.total_repeats,
+          metricList(e?.metrics),
+          s.selected?.[s.contract_hash] === c.id ? "Selected" : "",
+        ];
+      });
+      target.append(
+        table(
+          [
+            "Version",
+            "Candidate",
+            "Parent",
+            "Status",
+            "Validity",
+            "Evaluation",
+            "Repeats",
+            "Metrics",
+            "Selection",
+          ],
+          rows,
+        ),
+      );
+      document.querySelector("#detail").replaceChildren();
+      if (s.candidates.length) showCandidate(s, s.candidates.at(-1));
+    }
+    function render(d) {
+      data = d;
+      document
+        .querySelector("#summary")
+        .append(
+          el(
+            "p",
+            `${d.run.mode} · evaluations charged ${d.run.solver_trial_starts} / ${d.run.max_solver_trial_starts} · reserved ${d.run.reserved_solver_trial_starts}`,
+          ),
+        );
+      document
+        .querySelector("#warnings")
+        .replaceChildren(...d.warnings.map((x) => el("p", x)));
+      const s = document.querySelector("#session");
+      d.sessions.forEach((x, i) => {
+        const o = el("option", x.id);
+        o.value = i;
+        s.append(o);
+      });
+      s.onchange = showSession;
+      showSession();
+    }
+    document.querySelector("#theme-toggle").onclick = () => {
+      const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = theme;
+      try { localStorage.setItem("ari-theme", theme); } catch {}
+    };
+    if (embedded) render(embedded);
+    else
+      fetch("/api/research")
+        .then((x) => x.json())
+        .then(render);
+  </script>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "autoresearch-infrastructure-viewer-tests",
+  "private": true,
+  "scripts": {
+    "test:viewer": "node tests/viewer-browser.cjs",
+    "test:progress": "node tests/viewer-progress-browser.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

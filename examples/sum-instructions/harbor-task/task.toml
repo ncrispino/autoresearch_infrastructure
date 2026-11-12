@@ -1,0 +1,11 @@
+[environment]
+workdir = "/workspace"
+cpus = 1
+memory_mb = 512
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 30
+
+[verifier]
+timeout_sec = 30

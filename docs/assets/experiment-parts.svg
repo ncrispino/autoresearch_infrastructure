@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="546" viewBox="0 0 1120 546" role="img" aria-labelledby="title description">
+  <title id="title">A task, its run settings and its results</title>
+  <desc id="description">task.py holds the task: the objective, the evaluator, the seed files and the instructions. run.toml holds the run settings: limits, researcher, reviewer and task options. The ari commands read both and write the results: every candidate, a summary and a results page. The researcher reads four things in order: the objective you wrote, what is measured (added by ARI), the constraints you wrote, and how to submit (added by ARI).</desc>
+  <style>
+    :root { --bg: #f5f7fa; --panel: #fff; --ink: #172a40; --muted: #52677e; --line: #cfd8e3; --accent: #275ed2; --tint: #eaf0ff; --code: #e9eef4; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: var(--color-canvas-default, #101a29); --panel: var(--color-canvas-subtle, #18263a); --ink: var(--color-fg-default, #edf3ff); --muted: var(--color-fg-muted, #b3c2d8); --line: var(--color-border-default, #3c506c); --accent: #90b3ff; --tint: #243b63; --code: #293b52; }
+    }
+    text { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: var(--ink); }
+    .muted { fill: var(--muted); }
+    .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; fill: var(--muted); }
+    .heading { font-size: 19px; font-weight: 650; }
+    .note { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13.5px; fill: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 14px; }
+    .panel { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+    .arrow { stroke: var(--accent); stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowhead); }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="m1 1 6 3-6 3" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect width="1120" height="546" rx="18" fill="var(--bg)"/>
+
+  <g transform="translate(32 32)">
+    <rect width="320" height="206" rx="12" class="panel"/>
+    <text x="20" y="30" class="eyebrow">THE TASK</text>
+    <text x="20" y="61" class="heading mono" font-size="19">task.py</text>
+    <rect x="20" y="78" width="280" height="108" rx="7" fill="var(--code)"/>
+    <text class="mono">
+      <tspan x="34" y="103">objective</tspan><tspan x="172" class="note">the metric</tspan>
+      <tspan x="34" y="127">evaluator</tspan><tspan x="172" class="note">scores a candidate</tspan>
+      <tspan x="34" y="151">seed/</tspan><tspan x="172" class="note">starting files</tspan>
+      <tspan x="34" y="175">instructions</tspan><tspan x="172" class="note">what to do</tspan>
+    </text>
+  </g>
+
+  <g transform="translate(400 32)">
+    <rect width="320" height="206" rx="12" class="panel"/>
+    <text x="20" y="30" class="eyebrow">WHO RUNS IT</text>
+    <text x="20" y="61" class="heading mono" font-size="19">run.toml</text>
+    <rect x="20" y="78" width="280" height="108" rx="7" fill="var(--code)"/>
+    <text class="mono">
+      <tspan x="34" y="103">[limits]</tspan><tspan x="160" class="note">the budget</tspan>
+      <tspan x="34" y="127">[researcher]</tspan><tspan x="160" class="note">proposes changes</tspan>
+      <tspan x="34" y="151">[reviewer]</tspan><tspan x="160" class="note">checks the rules</tspan>
+      <tspan x="34" y="175">[task]</tspan><tspan x="160" class="note">task options</tspan>
+    </text>
+  </g>
+
+  <g transform="translate(768 32)">
+    <rect width="320" height="206" rx="12" class="panel"/>
+    <text x="20" y="30" class="eyebrow">THE RESULTS</text>
+    <text x="20" y="61" class="heading mono" font-size="19">--output</text>
+    <rect x="20" y="78" width="280" height="108" rx="7" fill="var(--code)"/>
+    <text class="mono">
+      <tspan x="34" y="103">research/</tspan><tspan x="160" class="note">every candidate</tspan>
+      <tspan x="34" y="127">summary.json</tspan><tspan x="160" class="note">the outcome</tspan>
+      <tspan x="34" y="151">viewer.html</tspan><tspan x="160" class="note">a results page</tspan>
+    </text>
+  </g>
+
+  <path d="M192 238v32" class="arrow"/>
+  <path d="M560 238v32" class="arrow"/>
+  <path d="M928 278v-32" class="arrow"/>
+
+  <g transform="translate(32 278)">
+    <rect width="1056" height="92" rx="12" fill="var(--tint)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text class="mono">
+      <tspan x="24" y="38">ari check</tspan><tspan x="124" class="note">look, start nothing</tspan>
+      <tspan x="24" y="66">ari record</tspan><tspan x="124" class="note">score your own edit</tspan>
+      <tspan x="560" y="38">ari run</tspan><tspan x="644" class="note">let researchers work</tspan>
+      <tspan x="560" y="66">ari view</tspan><tspan x="644" class="note">open the results</tspan>
+    </text>
+  </g>
+
+  <text x="32" y="414" class="eyebrow">WHAT THE RESEARCHER READS</text>
+  <g transform="translate(32 432)">
+    <rect width="252" height="82" rx="10" class="panel" stroke-width="1.5"/>
+    <text x="16" y="26" class="eyebrow">YOU WRITE</text>
+    <text x="16" y="50" class="label" font-weight="600">Objective</text>
+    <text x="16" y="69" class="note">what to improve</text>
+  </g>
+  <g transform="translate(300 432)">
+    <rect width="252" height="82" rx="10" fill="var(--tint)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="16" y="26" class="eyebrow">ARI ADDS</text>
+    <text x="16" y="50" class="label" font-weight="600">What is measured</text>
+    <text x="16" y="69" class="note">the metric and its direction</text>
+  </g>
+  <g transform="translate(568 432)">
+    <rect width="252" height="82" rx="10" class="panel" stroke-width="1.5"/>
+    <text x="16" y="26" class="eyebrow">YOU WRITE</text>
+    <text x="16" y="50" class="label" font-weight="600">Constraints</text>
+    <text x="16" y="69" class="note">rules and limits</text>
+  </g>
+  <g transform="translate(836 432)">
+    <rect width="252" height="82" rx="10" fill="var(--tint)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="16" y="26" class="eyebrow">ARI ADDS</text>
+    <text x="16" y="50" class="label" font-weight="600">How to submit</text>
+    <text x="16" y="69" class="note">the same for every task</text>
+  </g>
+</svg>

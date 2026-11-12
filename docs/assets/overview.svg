@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="600" viewBox="0 0 1120 600" role="img" aria-labelledby="title description">
+  <title id="title">Autoresearch Infrastructure: a task, a native Harbor researcher, and a recorded experiment</title>
+  <desc id="description">An example task fits a polynomial to thirteen fixed observations by editing coefficients.json to minimize root mean squared error. The chart shows the example's observations and an illustrative quadratic, not a measured run result. Task instructions and starting files go to a native Harbor researcher in Docker. Submitting creates a new immutable version inside the host controller's collection of baseline and saved versions, before validity or evaluation. The submission arrow lands directly on that new version. Only valid versions are evaluated and eligible for selection; invalid versions remain recorded. Results and prior solutions return to the researcher within a fixed budget. The viewer shows saved versions, diffs, checks, scores and original Agent Trajectory Interchange Format (ATIF) logs when available. Any native Harbor harness with MCP and ATIF support can be the researcher.</desc>
+  <style>
+    :root { --bg: #f5f7fa; --panel: #fff; --ink: #172a40; --muted: #52677e; --line: #cfd8e3; --accent: #275ed2; --tint: #eaf0ff; --code: #e9eef4; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: var(--color-canvas-default, #101a29); --panel: var(--color-canvas-subtle, #18263a); --ink: var(--color-fg-default, #edf3ff); --muted: var(--color-fg-muted, #b3c2d8); --line: var(--color-border-default, #3c506c); --accent: #90b3ff; --tint: #243b63; --code: #293b52; }
+    }
+    text { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: var(--ink); }
+    .muted { fill: var(--muted); }
+    .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; fill: var(--muted); }
+    .heading { font-size: 19px; font-weight: 650; }
+    .label { font-size: 15px; }
+    .small { font-size: 13px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 14px; }
+    .line { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .panel { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+    .arrow { stroke: var(--accent); stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowhead); }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="m1 1 6 3-6 3" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect width="1120" height="600" rx="18" fill="var(--bg)"/>
+  <text x="32" y="37" class="eyebrow">AUTORESEARCH INFRASTRUCTURE</text>
+  <text x="32" y="76" font-size="27" font-weight="650">Autoresearch with Harbor</text>
+
+  <rect x="32" y="100" width="1056" height="106" rx="12" class="panel"/>
+  <path d="M56 118v66h128" class="line"/>
+  <path d="M60 173.6Q120 197 180 126.8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+  <g fill="var(--ink)" stroke="var(--panel)" stroke-width="1.2">
+    <circle cx="60" cy="172.82" r="3.2"/><circle cx="70" cy="177.11" r="3.2"/>
+    <circle cx="80" cy="177.76" r="3.2"/><circle cx="90" cy="179.97" r="3.2"/>
+    <circle cx="100" cy="179.58" r="3.2"/><circle cx="110" cy="176.434" r="3.2"/>
+    <circle cx="120" cy="174.12" r="3.2"/><circle cx="130" cy="168.79" r="3.2"/>
+    <circle cx="140" cy="162.68" r="3.2"/><circle cx="150" cy="156.674" r="3.2"/>
+    <circle cx="160" cy="146.56" r="3.2"/><circle cx="170" cy="138.37" r="3.2"/>
+    <circle cx="180" cy="126.02" r="3.2"/>
+  </g>
+  <text x="212" y="135" class="eyebrow">EXAMPLE · CURVE FITTING</text>
+  <text x="212" y="168" class="heading">Minimize fit error (RMSE)</text>
+
+  <path d="M176 206v62" class="arrow"/>
+  <text x="44" y="242" class="small muted">Instructions + seed</text>
+  <path d="M550 206v62" class="arrow"/>
+  <text x="570" y="242" class="small muted">Evaluator + validity</text>
+
+  <g transform="translate(32 268)">
+    <rect width="288" height="222" rx="12" class="panel"/>
+    <text x="20" y="30" class="eyebrow">HARBOR RESEARCHER</text>
+    <text x="20" y="61" class="heading">Harness + model</text>
+    <rect x="20" y="77" width="248" height="76" rx="7" fill="var(--code)"/>
+    <text x="34" y="104" class="mono">coefficients.json</text>
+    <text x="34" y="132" class="small muted">Edit candidate files</text>
+    <text x="20" y="192" class="label muted">Docker workspace</text>
+  </g>
+
+  <g transform="translate(382 268)">
+    <rect width="336" height="222" rx="12" fill="var(--tint)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="20" y="30" class="eyebrow">ARI · HOST CONTROLLER</text>
+    <rect x="20" y="48" width="296" height="66" rx="7" class="panel"/>
+    <text x="34" y="69" class="small muted">Baseline + saved candidates</text>
+    <rect x="32" y="77" width="272" height="28" rx="5" fill="var(--tint)" stroke="var(--accent)"/>
+    <text x="48" y="96" class="label" font-weight="650">+ New candidate</text>
+    <path d="M168 105v17H88v9" class="arrow"/>
+    <rect x="20" y="131" width="137" height="41" rx="6" class="panel"/>
+    <rect x="179" y="131" width="137" height="41" rx="6" class="panel"/>
+    <text x="88" y="157" class="label" text-anchor="middle">Validity</text>
+    <path d="M159 151h18" class="arrow"/>
+    <text x="247" y="157" class="label" text-anchor="middle">Evaluation</text>
+    <text x="20" y="204" class="label">Keep the best valid candidate</text>
+  </g>
+
+  <path d="M320 359h94" class="arrow"/>
+  <text x="328" y="346" class="small muted">Submit</text>
+  <path d="M718 363h62" class="arrow"/>
+
+  <g transform="translate(780 268)">
+    <rect width="308" height="222" rx="12" class="panel"/>
+    <circle cx="18" cy="20" r="3.5" fill="var(--line)"/>
+    <circle cx="30" cy="20" r="3.5" fill="var(--line)"/>
+    <circle cx="42" cy="20" r="3.5" fill="var(--line)"/>
+    <text x="61" y="25" class="eyebrow">COMPARISON VIEWER</text>
+    <path d="M0 40h308" class="line"/>
+    <text x="20" y="72" class="heading">Compare candidates</text>
+    <rect x="20" y="90" width="125" height="66" rx="6" fill="var(--bg)" stroke="var(--line)"/>
+    <rect x="157" y="90" width="131" height="66" rx="6" fill="var(--bg)" stroke="var(--line)"/>
+    <text x="31" y="111" class="small muted">Baseline</text>
+    <text x="168" y="111" class="small muted">Candidate</text>
+    <path d="M32 126h92m-92 12h70m-70 10h86M169 126h92m-92 12h70m-70 10h86" class="line"/>
+    <path d="M169 138h70" stroke="var(--accent)" stroke-width="3"/>
+    <text x="20" y="182" class="small muted">Diffs · scores · checks</text>
+    <rect x="20" y="193" width="268" height="21" rx="4" fill="none" stroke="var(--line)" stroke-dasharray="5 4"/>
+    <text x="31" y="208" class="small muted">Original ATIF</text>
+  </g>
+
+  <path d="M550 490v46H176v-46" class="arrow"/>
+  <text x="248" y="526" class="label muted">Results + history</text>
+  <text x="576" y="528" class="small muted">Repeat within budget</text>
+  <path d="M32 557h1056" class="line"/>
+  <text x="32" y="583" class="label">Any Harbor agent that supports MCP servers and writes ATIF trajectories</text>
+</svg>

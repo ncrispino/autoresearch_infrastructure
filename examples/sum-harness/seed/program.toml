@@ -1,0 +1,3 @@
+id = "sum-solver"
+description = "One-session solver for a file-producing task"
+entrypoint = "solve.py:solve"

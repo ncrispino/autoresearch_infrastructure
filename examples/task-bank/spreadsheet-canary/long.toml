@@ -1,0 +1,96 @@
+status = "implemented-preflight-required"
+runnable = true
+task_id = "spreadsheet-long-budget-harness-search"
+solver_model = "gpt-6-luna"
+solver_provider = "openrouter"
+output = "/tmp/ari-sheets-harness-long"
+max_new_candidates = 8
+max_researcher_invocations = 10
+max_reviewer_invocations = 10
+max_reference_trial_starts = 30
+max_solver_trial_starts = 96
+max_harness_session_starts = 96
+max_sessions_per_trial = 1
+max_parallel_trials = 1
+solver_timeout_seconds = 600
+research_guidance = """
+Optimize reusable spreadsheet orchestration, not case-specific answers. Inspect relevant
+public source ranges and preserve the requested formulas, values, formatting and files.
+The unchanged adapter recalculates workbooks with LibreOffice. Formula serialization
+and engine support matter; do not replace explicitly requested formulas with constants.
+
+Prior development findings: verbose inspection/checklist workflows exceeded a shorter
+solver deadline; formula/value guidance and automatic recalculation metadata did not
+reliably fix formula errors. A style-diagnostic hook with a 12000-character threshold
+never activated, so it provided no demonstrated benefit. Test a concrete new mechanism
+and check its activation on representative public observations before submitting. Keep
+native diagnostics compact and distinguish API errors from task failures.
+
+The public hook API requires async pre_tool(call) returning Allow/Deny, and async
+post_tool(call, observation) returning ToolObservation; preserve call IDs and errors.
+Ordinary helper functions may be synchronous. Prompts, local skills and bounded hooks
+are editable, but model/provider, reasoning effort, tool permissions and deadlines are
+frozen. One total solver session per trial; no helpers, retries or direct inference.
+All model inference must use runtime.run_harness. No new external dependencies or
+reference/verifier inspection. Use only legitimate public task data. A ten-minute
+solver deadline applies equally to baseline and every candidate in this fresh study.
+"""
+
+[screen]
+cases = 6
+repeats = 1
+candidates_including_baseline = 9
+# 54 planned starts plus six spare starts; retries remain charged.
+max_solver_trial_starts = 60
+
+[confirmation]
+cases = 8
+repeats = 2
+candidates_including_baseline = 2
+# 32 planned starts plus four spare starts.
+max_solver_trial_starts = 36
+
+[benchmark]
+name = "spreadsheetbench-verified"
+version = "1.0"
+revision = "0ad7209b09780e78c6c80f194e49e353191be1cc"
+source = "https://github.com/harbor-framework/harbor-datasets"
+source_adapter = "https://github.com/harbor-framework/harbor/tree/main/adapters/spreadsheetbench-verified"
+screen_task_ids = ["42515", "280-17", "269-43", "50631", "7665", "42902"]
+confirmation_task_ids = ["50250", "146-49", "41589", "48643", "545-35", "47842", "395-36", "48745"]
+confirmation_selection = "Eight smallest SHA256(seed + ':' + task_id), excluding all thirteen previously used cases, before outcomes"
+confirmation_selection_seed = "ari-spreadsheet-long-budget-confirm-v1"
+excluded_confirmation_task_ids = ["10452", "105-24", "10747", "192-22", "269-43", "280-17", "34033", "42515", "42902", "49036", "50631", "53994", "7665"]
+negative_control_task_ids = ["42515"]
+task_ids_pinned = true
+reward = "upstream-verifier"
+preserve_task_definitions = true
+preserve_verifier = true
+
+[harness]
+backend = "custom-harbor-agent"
+candidate = "shared-program-skills-hooks"
+capability_interface = "harbor-task-terminal-filesystem"
+benchmark_specific_runtime_branches = false
+include_solver_tokens = true
+
+[validity]
+scope = "Edit only the generic program, prompts, skills and bounded callbacks. Preserve benchmark-harness program ID, original tasks and verifier. Model/provider, runtime reasoning effort, inference budgets, permissions and deadlines are frozen, including call-site overrides. Public workbook tooling and documented LibreOffice compatibility workflows are allowed."
+generality = "Use public instructions and observations. No task IDs, expected answers, exact-question lookup, hidden tests, reference assets, verifier internals, per-case exceptions or reward manipulation. Task-type-dependent workflows are allowed when they perform the legitimate requested transformation."
+accounting = "All inference uses runtime.run_harness, with at most one session per trial. No helpers, retries, native delegation, direct APIs or new external dependencies. All task effects use the supplied exec capability; do not evade its hooks, bounds or accounting."
+
+# Standard Harbor reviewer; publisher-qualified OpenRouter routing.
+[reviewer]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 240
+[reviewer.kwargs]
+record_terminal_session = false
+
+# Standard Harbor researcher, configured independently of the solver and reviewer.
+[researcher]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 7200
+[researcher.kwargs]
+record_terminal_session = false

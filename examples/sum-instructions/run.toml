@@ -1,0 +1,27 @@
+# Run settings: a Harbor researcher rewrites the instructions and a fixed solver
+# attempts the task. The reviewer uses the researcher's agent.
+
+[limits]
+candidates = 3
+evaluations = 3
+
+[researcher]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 300
+[researcher.kwargs]
+record_terminal_session = false
+
+# The agent whose success is measured: a Harbor agent configuration. Its model
+# requests come from the controller; its terminal work happens in the task container.
+[task.solver]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 120
+[task.solver.kwargs]
+record_terminal_session = false
+
+[task]
+# The Harbor task's own Dockerfile has Python only. Terminus-2 also needs tmux,
+# so build an image that adds it and pin its ID here:
+# image = "sha256:<task-image-id>"

@@ -1,0 +1,37 @@
+status = "proposed"
+runnable = false
+task_id = "sqlite-workload-indexes"
+# No model-backed solver or reviewer is required for this declarative task.
+output = "runs/ari-pilots/sqlite-workload-indexes"
+max_new_candidates = 3
+max_researcher_invocations = 4
+max_evaluator_starts = 14
+max_search_evaluator_starts = 10
+max_reference_evaluator_starts = 4
+max_solver_model_calls = 0
+max_reviewer_model_calls = 0
+max_indexes = 3
+max_index_storage_ratio = 0.25
+max_parallel_evaluations = 1
+
+[screen]
+orders = 10000
+query_instances = 8
+repeats = 1
+candidates_including_baseline = 4
+max_evaluator_starts = 4
+
+[confirmation]
+orders = 100000
+query_instances = 32
+repeats = 3
+candidates_including_baseline = 2
+max_evaluator_starts = 6
+
+# Standard Harbor researcher, configured independently of the solver and reviewer.
+[researcher]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 600
+[researcher.kwargs]
+record_terminal_session = false

@@ -1,0 +1,7 @@
+# Run settings without agents: demo.py, or you, make the proposals.
+reviewer = false     # the task's check alone decides validity
+
+[limits]
+candidates = 10
+evaluations = 12
+repeats = 2          # each candidate is measured twice

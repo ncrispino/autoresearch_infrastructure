@@ -1,0 +1,26 @@
+status = "implemented-preflight-required"
+runnable = true
+purpose = "Six new development cases to calibrate headroom; no search or confirmation claim"
+solver_model = "gpt-6-luna"
+solver_provider = "openrouter"
+solver_timeout_seconds = 180
+max_solver_trial_starts = 6
+max_harness_session_starts = 6
+max_sessions_per_trial = 1
+max_parallel_trials = 1
+# Six original oracles and one no-op control; failed setup starts remain charged.
+max_reference_trial_starts = 14
+
+[benchmark]
+name = "spreadsheetbench-verified"
+version = "1.0"
+revision = "0ad7209b09780e78c6c80f194e49e353191be1cc"
+source = "https://github.com/harbor-framework/harbor-datasets"
+source_adapter = "https://github.com/harbor-framework/harbor/tree/main/adapters/spreadsheetbench-verified"
+selection = "Take six smallest SHA256(seed + ':' + task_id), excluding the original three, before model outcomes"
+selection_seed = "ari-spreadsheet-calibration-v2"
+excluded_task_ids = ["10452", "105-24", "10747"]
+task_ids = ["42515", "280-17", "269-43", "50631", "7665", "42902"]
+negative_control_task_ids = ["42515"]
+preserve_task_definitions = true
+preserve_verifier = true

@@ -1,0 +1,3 @@
+id="helper-session"
+description="Ask one tool-free child session for a next-step hint."
+entrypoint="solve.py:solve"

@@ -1,0 +1,67 @@
+status = "implemented-preflight-required"
+runnable = true
+task_id = "harbor-quixbugs-harness"
+solver_model = "gpt-6-luna"
+solver_provider = "openrouter"
+# Resolve provider-qualified IDs and immutable image identity during preflight.
+output = "runs/ari-pilots/harbor-quixbugs-harness"
+max_new_candidates = 3
+max_researcher_invocations = 4
+max_reviewer_invocations = 3
+max_reference_trial_starts = 14
+max_solver_trial_starts = 24
+max_harness_session_starts = 48
+max_sessions_per_trial = 2
+max_parallel_trials = 1
+solver_timeout_seconds = 120
+
+[screen]
+cases = 2
+repeats = 1
+candidates_including_baseline = 4
+max_solver_trial_starts = 8
+
+[confirmation]
+cases = 4
+repeats = 2
+candidates_including_baseline = 2
+max_solver_trial_starts = 16
+
+[benchmark]
+name = "quixbugs"
+source_adapter = "https://github.com/harbor-framework/harbor/tree/main/adapters/quixbugs"
+# Frozen upstream revision and disjoint panels.
+revision = "37db108843a49bb31a592e37a75e2c40dc3f9749"
+version = "1.0"
+uv_install_version = "0.12.23"
+screen_task_ids = ["quixbugs-python-knapsack", "quixbugs-python-levenshtein"]
+confirmation_task_ids = ["quixbugs-python-kheapsort", "quixbugs-python-shortest_path_length", "quixbugs-python-next_permutation", "quixbugs-python-longest_common_subsequence"]
+negative_control_task_ids = ["quixbugs-python-knapsack"]
+task_ids_pinned = true
+reward = "upstream-verifier"
+preserve_task_definitions = true
+preserve_verifier = true
+
+[harness]
+# Installed agent: autoresearch_infrastructure.harbor_agent:HarnessProgramAgent.
+backend = "custom-harbor-agent"
+candidate = "shared-program-skills-hooks"
+capability_interface = "harbor-task-terminal-filesystem"
+benchmark_specific_runtime_branches = false
+include_solver_tokens = true
+
+# Standard Harbor reviewer; publisher-qualified OpenRouter routing.
+[reviewer]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 180
+[reviewer.kwargs]
+record_terminal_session = false
+
+# Standard Harbor researcher, configured independently of the solver and reviewer.
+[researcher]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 600
+[researcher.kwargs]
+record_terminal_session = false

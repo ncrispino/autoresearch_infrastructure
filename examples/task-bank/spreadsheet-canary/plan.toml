@@ -1,0 +1,24 @@
+status = "implemented-preflight-required"
+runnable = true
+purpose = "Three-task baseline timing and headroom calibration; no search or confirmation claim"
+solver_model = "gpt-6-luna"
+solver_provider = "openrouter"
+solver_timeout_seconds = 180
+max_solver_trial_starts = 3
+max_harness_session_starts = 3
+max_sessions_per_trial = 1
+max_parallel_trials = 1
+# Three oracles and one no-op control, plus setup-failure allowance.
+max_reference_trial_starts = 8
+
+[benchmark]
+name = "spreadsheetbench-verified"
+version = "1.0"
+revision = "0ad7209b09780e78c6c80f194e49e353191be1cc"
+source = "https://github.com/harbor-framework/harbor-datasets"
+source_adapter = "https://github.com/harbor-framework/harbor/tree/main/adapters/spreadsheetbench-verified"
+selection = "First three task IDs in the pinned registry export, before model outcomes"
+task_ids = ["10452", "105-24", "10747"]
+negative_control_task_ids = ["10452"]
+preserve_task_definitions = true
+preserve_verifier = true

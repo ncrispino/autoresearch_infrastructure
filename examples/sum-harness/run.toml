@@ -1,0 +1,24 @@
+# Run settings: a Harbor researcher edits the solver program, and the edited
+# program runs one solver session per trial. The reviewer uses the researcher's agent.
+
+[limits]
+candidates = 3
+evaluations = 3
+
+[researcher]
+name = "terminus-2"
+model_name = "openrouter/openai/gpt-6-luna"
+override_timeout_sec = 600
+[researcher.kwargs]
+record_terminal_session = false
+
+# The model the solver program runs on. The harness is the coding-agent CLI in
+# the --image container: codex or claude-code.
+[task.solver]
+harness = "codex"
+provider = "openrouter"
+model = "openai/gpt-6-luna"
+
+[task]
+# Optional: pin a prepared image for the Harbor task instead of building its Dockerfile.
+# image = "sha256:<task-image-id>"
