@@ -53,7 +53,7 @@ A task has four parts:
 | --- | --- |
 | `seed` | Directory of starting files. Paths are relative to the task file; the default is `seed/` beside it. |
 | `instructions` | What the researcher is told: an `ari.Instructions(objective=..., rules=[...], environment=[...])`, or Markdown with `## Objective` and `## Constraints` (`### Rules`, `### Environment`). A `Path` names a Markdown file; the default is `instructions.md` beside the task file. ARI lays the instructions out the same way for every task and adds what the task already knows: the starting files, the metric and its direction, tie-breakers, bounds, and the number of cases and repeats. Do not restate the direction in prose. |
-| `objective` | The `Metric` to improve, or an `Objective`. See [Metrics, objectives and bounds](#metrics-objectives-and-bounds). |
+| `objective` | The `Metric` to improve, or an `Objective`: what is measured and how candidates are ranked. This is not the written goal in `Instructions.objective`. See [Metrics, objectives and bounds](#metrics-objectives-and-bounds). |
 | `evaluator` | Measures one candidate on one case. See [Write an evaluator](#write-an-evaluator). |
 
 Three more are optional:
@@ -429,6 +429,23 @@ Creating an `LLMValidity` starts nothing.
 applies the same verdict conditions to your own `reviewer(candidate,
 verdict_path, prompt)` function. You are responsible for isolating it.
 
+### Relabel a finished run
+
+The reviewer is part of the run: it judges against the rules and text the
+researcher was given. A study that changes those, for example by rewording or
+leaving out a rule, may also want every candidate judged against the original
+rules afterwards. ARI has no command for this, but a run saves what it needs.
+Paths are relative to the run directory:
+
+| Saved output | What it holds |
+| --- | --- |
+| `plan.json`, key `instructions` | The exact text the researcher read |
+| `research/sessions/research/history/candidates/<id>/snapshot/` | Each candidate's files, frozen. The baseline is `candidate-0001`. |
+| `research/sessions/research/history/candidates/<id>/validity/<contract>/attempt-NNNN/assignment.json` | The criteria and task specification each review used |
+| `research/sessions/research/history/index.json` | Every candidate's parent, proposal, verdict and scores |
+
+Candidates the reviewer rejected were not evaluated, so they have no scores.
+
 ## Write an evaluator
 
 An evaluator is a function or callable object `(candidate, context) ->
@@ -794,7 +811,21 @@ The researcher submits with the `record_candidate` tool, which ARI serves as an
 MCP server named `autoresearch`. A terminal agent can run
 `python /opt/autoresearch/mcp_proxy.py --call FILE.json` instead. A submission
 needs a `proposal` with a `hypothesis` and a `mechanism`. The controller fixes the
-parent and the repeat count. The
+parent and the repeat count.
+
+Every proposal starts a new agent, whether the previous candidate was valid,
+invalid or never submitted. No conversation carries over. A researcher learns
+from earlier work only through:
+
+- its parent's files, copied into `/workspace/candidate/`;
+- `/history/`, the run's memory, which ARI rewrites after each candidate;
+- files it or an earlier researcher left elsewhere under `/workspace/`, which
+  `propose` does not reset. `/tmp/` is emptied between starts.
+
+The researchers' own trajectories are saved under `agent/invocations/` but are
+not mounted into `/history/`.
+
+The
 [launch guide](skills/use-autoresearch-infrastructure/references/running-autoresearch.md)
 describes where each process runs.
 
