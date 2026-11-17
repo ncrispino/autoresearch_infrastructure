@@ -264,3 +264,51 @@ def test_the_import_command_starts_nothing(finished, capsys):
                      "--config", str(settings(directory, 5, 5, "import.toml")), "--image", IMAGE, "--json"])
     summary = json.loads(capsys.readouterr().out)
     assert code == 0 and summary["candidates"] == [] and len(summary["reevaluates"]["pending"]) == 3
+
+
+def test_an_extension_with_a_reviewer_reuses_verdicts_and_counts_review_starts(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from autoresearch_infrastructure.persistence import write_json
+
+    reviews = []
+
+    def review(**kwargs):
+        assignment = json.loads(next(
+            path for path, target in kwargs["readonly"].items() if target == "/review/assignment.json"
+        ).read_text())
+        reviews.append(assignment["candidate_hash"])
+        write_json(kwargs["workspace"] / "validity/verdict.json", {
+            "candidate_hash": assignment["candidate_hash"], "contract_hash": assignment["contract_hash"],
+            "verdict": "valid", "reasons": ["Fixture review"],
+            "checks": [{"criterion": "rule_1", "status": "pass", "evidence_paths": ["/review/candidate/value.json"]}],
+        })
+        return SimpleNamespace(agent_result=SimpleNamespace(cost_usd=0.1), exception_info=None)
+
+    monkeypatch.setattr("autoresearch_infrastructure.review.run_filesystem_agent", review)
+    directory = tmp_path / "task"
+    (directory / "seed").mkdir(parents=True)
+    (directory / "seed/value.json").write_text("0")
+    (directory / "task.py").write_text(TASK)
+
+    def reviewed(candidates, name):
+        path = directory / name
+        path.write_text(f"[limits]\ncandidates = {candidates}\nevaluations = {candidates}\n"
+                        f"[researcher]\n{AGENT}[reviewer]\n{AGENT}")
+        return path
+
+    fixture_agent(monkeypatch, [4])
+    source = launch.open_run(directory, reviewed(2, "run.toml"), tmp_path / "source", IMAGE)
+    with source.research:
+        assert launch.run_researchers(source)["starts"] == {"researcher": 1, "reviewer": 2}
+    assert len(reviews) == 2
+
+    fixture_agent(monkeypatch, [9])
+    child = launch.open_run(directory, reviewed(3, "more.toml"), tmp_path / "child", IMAGE,
+                            extends=tmp_path / "source")
+    with child.research:
+        summary = launch.run_researchers(child)
+    assert len(reviews) == 3  # only the new candidate is reviewed
+    assert summary["starts"] == {"researcher": 2, "reviewer": 3}
+    assert summary["start_limits"] == {"researcher": 2, "reviewer": 3}
+    assert [row["status"] for row in summary["candidates"]] == ["valid", "valid", "valid"]
