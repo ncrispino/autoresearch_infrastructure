@@ -555,7 +555,7 @@ def test_transformations_change_what_both_agents_read_and_keep_the_original(exam
                                      'ari.transforms.add_rule("Write a comment."), ari.transforms.omit_measured()],')
     with opened.research:
         assert opened.research.validity.criteria == {"rule_1": "Hold any number.", "rule_2": "Write a comment."}
-        assert "What is measured" not in opened.instructions
+        assert "What is measured" not in opened.inputs.specification()
     plan = json.loads((example.output / "plan.json").read_text())
     assert "Hold one integer." in plan["inputs"]["original_instructions"]
     assert "Hold any number." in plan["instructions"]

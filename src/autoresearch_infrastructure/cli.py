@@ -25,6 +25,7 @@ def main(argv=None):
         command.add_argument("--image", help="Immutable image ID for the researcher and reviewer")
         command.add_argument("--reviewer-image", help="Immutable image ID for the reviewer only")
         command.add_argument("--json", action="store_true", help="Print one JSON summary and no progress display")
+        command.set_defaults(source=None)
         if name in ("extend", "import"):
             command.add_argument("--from", dest="source", type=Path, required=True,
                                  help="The finished run directory to read; it is not modified")
@@ -63,8 +64,8 @@ def _task_command(args) -> int:
     try:
         with TerminalProgress(enabled=not args.json) as progress:
             run = launch.open_run(args.task, config, args.output, args.image, progress=progress,
-                                  extends=getattr(args, "source", None) if args.command == "extend" else None,
-                                  reevaluates=getattr(args, "source", None) if args.command == "import" else None,
+                                  extends=args.source if args.command == "extend" else None,
+                                  reevaluates=args.source if args.command == "import" else None,
                                   reviewer_image=args.reviewer_image)
             with run.research:
                 summary = action(run)
@@ -95,6 +96,9 @@ def _print(summary: dict) -> None:
     if "extends" in summary:
         lineage = summary["extends"]
         print(f"Extends: {lineage['source']} ({len(lineage['imported_candidates'])} candidates imported)")
+    if "reevaluates" in summary:
+        source = summary["reevaluates"]
+        print(f"Re-evaluates: {source['source']} ({len(source['pending'])} candidates still to evaluate)")
     print("Workspace:", summary["workspace"])
     print("Viewer:", summary.get("viewer") or f"ari view {summary['output']} --html <new-file.html>")
 

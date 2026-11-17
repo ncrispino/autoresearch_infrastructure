@@ -122,13 +122,13 @@ def load(directory: Path) -> HarborEnvironment:
     return HarborEnvironment(config, files)
 
 
-def stage(environment: HarborEnvironment, target: Path) -> HarborEnvironment:
-    """Copy the definition into the run directory, so later edits to the task cannot change it."""
+def stage(environment: HarborEnvironment, target: Path) -> Path:
+    """Copy the definition's files to ``target``, so later edits to the task cannot change a run."""
     if environment.files is None:
         target.mkdir(parents=True)
     else:
         shutil.copytree(environment.files, target)
-    return HarborEnvironment(environment.config, target)
+    return target
 
 
 def prepare(environment: HarborEnvironment) -> dict:

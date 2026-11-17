@@ -4,20 +4,19 @@ The canonical history under ``sessions/research/history`` is the controller's
 evidence and is never edited for a researcher. With the default memory a start
 mounts it directly. Any other policy builds a separate view for that start:
 copies of the visible candidates, an index listing only them, the preloaded
-records and the selected conversations. The view is deleted after the start;
-its manifest is kept in the start's input record.
+records, the selected conversations, and a log or summary when asked for. The
+view is deleted after the start; its manifest is kept in the start's input record.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
 from pathlib import Path
 
 from .inputs import Memory, Start
-from .persistence import write_json
+from .persistence import remove_tree, sha256_file, write_json
 from .search import researcher_starts
 
 
@@ -35,16 +34,15 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
     order = [entry["id"] for entry in index["candidates"]]
     hashes = {cid: research.candidates[cid]["source_hash"] for cid in order}
     carried = _conversations(research, memory)
-    manifest = {"memory": memory.identity(), "conversations": carried}
-    files = bool(carried)
+    manifest = {"conversations": carried}
     submissions = 1
     if memory.conversation_mode == "continue":
         submissions = None if memory.conversations == "all" else memory.conversations
     if (memory.history == "all" and preloaded is None and not memory.log and memory.summarize is None
-            and not files):
+            and not carried):
         # Nothing is hidden or added under /history, so the canonical history is mounted as it is.
         manifest["history"] = {"view": "canonical", "candidates": hashes,
-                               "index_sha256": _sha256(canonical / "index.json")}
+                               "index_sha256": sha256_file(canonical / "index.json")}
         return Start(number, parent_id, repeats, submissions=submissions), None, manifest
 
     if memory.history == "all":
@@ -55,7 +53,7 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
         visible = order[-memory.history:]
     view.mkdir(parents=True, exist_ok=True)
     for child in view.iterdir():  # emptied in place: a running session has this directory mounted
-        _remove(child) if child.is_dir() else child.unlink()
+        remove_tree(child) if child.is_dir() else child.unlink()
     for cid in visible:
         _copy(canonical / "candidates" / cid, view / "candidates" / cid)
     index["candidates"] = [entry for entry in index["candidates"] if entry["id"] in visible]
@@ -69,24 +67,23 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
         if not isinstance(summary, str):
             raise ValueError("Memory summarize must return text")
         (view / "summary.md").write_text(summary, encoding="utf-8")
-        manifest["summary_sha256"] = _sha256(view / "summary.md")
+        manifest["summary_sha256"] = sha256_file(view / "summary.md")
     if preloaded is not None:
         _copy(preloaded, view / "preloaded")
-    if files:
-        for number_, entry in enumerate(carried, 1):
-            source = research.root / entry["trajectory"]
-            _check(source, entry["sha256"])
-            target = view / "conversations" / f"{number_:04d}-{entry['invocation']}.json"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
+    for position, entry in enumerate(carried, 1):
+        source = research.root / entry["trajectory"]
+        if sha256_file(source) != entry["sha256"]:
+            raise ValueError(f"A saved researcher conversation changed: {source}")
+        target = view / "conversations" / f"{position:04d}-{entry['invocation']}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
     manifest["history"] = {"view": "filtered", "candidates": {cid: hashes[cid] for cid in visible},
-                           "index_sha256": _sha256(view / "index.json"), "preloaded": preloaded is not None}
+                           "index_sha256": sha256_file(view / "index.json"), "preloaded": preloaded is not None}
     start = Start(
         number, parent_id, repeats,
         visible=None if memory.history == "all" else tuple(visible),
         preloaded=preloaded is not None,
         conversations=tuple(entry["invocation"] for entry in carried),
-        conversation_mode=memory.conversation_mode,
         log=memory.log,
         summary=memory.summarize is not None,
         submissions=submissions,
@@ -120,7 +117,7 @@ def _log(index: dict) -> str:
 
 def discard(view: Path | None) -> None:
     if view is not None and view.exists():
-        _remove(view)
+        remove_tree(view)
 
 
 def _conversations(research, memory: Memory) -> list[dict]:
@@ -142,19 +139,3 @@ def _copy(source: Path, target: Path) -> None:
             if path.is_symlink() or not path.is_file():
                 raise ValueError(f"Memory views copy regular files only: {path}")
             shutil.copyfile(path, target / relative / name)
-
-
-def _remove(path: Path) -> None:
-    for current, dirs, _ in os.walk(path):
-        for name in dirs:
-            (Path(current) / name).chmod(0o755)
-    shutil.rmtree(path)
-
-
-def _check(path: Path, expected: str) -> None:
-    if _sha256(path) != expected:
-        raise ValueError(f"A saved researcher conversation changed: {path}")
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()

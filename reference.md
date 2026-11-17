@@ -921,8 +921,8 @@ ari.Task(..., memory=ari.Memory(history=3, conversations=2))
 | --- | --- | --- |
 | `history` | `"all"` (default), `"none"`, or `n` | Which earlier candidates appear under `/history`: all, none, or the `n` most recently recorded. |
 | `preload` | A directory | Earlier experiment records, such as another run's `history/`, shown under `/history/preloaded/`. They are copied into the run and sealed in the plan. They never become candidates, results or spent budget. |
-| `conversations` | `0` (default), `k`, or `"all"` | How much of earlier researcher conversations carries over. What `k` counts depends on `conversation_mode`. Starts are counted in time order, including failed starts and starts whose candidate was not selected. |
-| `conversation_mode` | `"files"` (default) or `"continue"` | `"files"`: every start is a fresh conversation that can read the conversations of the last `k` starts that saved one, as ATIF JSON under `/history/conversations/`. `"continue"`: one researcher session makes up to `k` proposals in a row, keeping its own conversation. See below. |
+| `conversations` | `0` (default), `k`, or `"all"` | How much conversation carries over. What `k` counts depends on `conversation_mode`. |
+| `conversation_mode` | `"files"` (default) or `"continue"` | `"files"`: every start is a fresh conversation that can read the conversations of the last `k` starts that saved one, as ATIF JSON under `/history/conversations/`. Starts are counted in time order, including failed starts and starts whose candidate was not selected. `"continue"`: one researcher session makes up to `k` proposals in a row, keeping its own conversation. See below. |
 | `log` | `False` (default) or `True` | Adds `/history/log.md`, a research log ARI writes from its own records before each start: every visible candidate's parent, hypothesis, mechanism, verdict and score. |
 | `summarize` | A function `(index) -> str` | Shown as `/history/summary.md`. It receives the visible `/history/index.json` content. It is trusted code: its identity goes into the plan and its output's hash into each start's record. |
 
@@ -1033,9 +1033,11 @@ as `inputs.original_instructions`, for relabeling afterwards. Scoring never
 changes. Every start saves, under `agent/inputs/<invocation>/`:
 
 - `prompt.md`: the exact prompt.
-- `inputs.json`: the parent and its hash, the prompt's hash, the memory policy,
-  the visible candidates with their hashes, the history index's hash, the carried
-  conversations with their hashes, the presenter and the environment's hash.
+- `inputs.json`: the parent and its hash, the prompt's hash, the visible
+  candidates with their hashes, the history index's hash, the conversations
+  mounted as files with their hashes, the presenter, the prepared environment's
+  images, the files restored into the workspace, and each candidate the start
+  recorded.
 
 ### What is configurable
 

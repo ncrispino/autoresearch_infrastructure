@@ -1,10 +1,11 @@
-"""Content hashes and atomic file writes."""
+"""Content hashes, atomic file writes and tree removal."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -47,3 +48,15 @@ def write_json(path: Path, value: Any) -> None:
     data = value.model_dump(mode="json") if hasattr(value, "model_dump") else value
     text = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
     write_bytes(path, text.encode("utf-8"))
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def remove_tree(path: Path) -> None:
+    """Delete a tree that may contain read-only directories, such as frozen snapshots."""
+    for current, dirs, _ in os.walk(path):
+        for name in dirs:
+            (Path(current) / name).chmod(0o755)
+    shutil.rmtree(path)

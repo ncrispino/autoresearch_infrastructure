@@ -10,7 +10,7 @@ from autoresearch_infrastructure import ValidityContext
 from autoresearch_infrastructure.ledger import StartLedger, StartLimitError
 from autoresearch_infrastructure.persistence import digest
 from autoresearch_infrastructure.pilot import ProgramValidity
-from autoresearch_infrastructure.search import SingleSubmissionRecorder
+from autoresearch_infrastructure.search import SubmissionRecorder
 from autoresearch_infrastructure.source_tree import materialize, snapshot
 from autoresearch_infrastructure.tool_server import CandidateToolServer
 
@@ -23,7 +23,7 @@ def test_proposer_gets_one_workspace_submission_with_the_selected_parent():
             calls.append((session, arguments))
             return {"candidate_id": "candidate-0002"}
 
-    recorder = SingleSubmissionRecorder(Runner(), "candidate-0001", 1)
+    recorder = SubmissionRecorder(Runner(), "candidate-0001", 1)
     with pytest.raises(ValueError, match="new workspace"):
         recorder.dispatch_record_candidate("research", {"candidate": "candidate-0001"})
     result = recorder.dispatch_record_candidate(

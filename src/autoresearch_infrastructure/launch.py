@@ -12,9 +12,7 @@ A run directory holds::
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +24,7 @@ from .api import Validity, code_identity
 from .inputs import ResearcherInputs, present
 from .instructions import task_facts
 from .ledger import StartLedger
-from .persistence import digest, write_json
+from .persistence import digest, remove_tree, sha256_file, write_json
 from .research import BASELINE, Research
 from .search import RESEARCHER_PROTOCOL, propose, researcher_starts, reset_candidate
 from .source_tree import python_tree_hash, snapshot, task_context_digest
@@ -41,17 +39,19 @@ class OpenRun:
     output: Path
     image: str | None
     ledger: StartLedger | None
-    instructions: str = ""
-    inputs: ResearcherInputs | None = None
+    inputs: ResearcherInputs
     environment: harbor_environment.HarborEnvironment | None = None
-    preloaded: Path | None = None
-    presenter_identity: str = "default"
     review_environment: harbor_environment.HarborEnvironment | None = None
-    replay: list[dict] | None = None
+    replay: list[dict] | None = None  # a finished run's candidates to review and evaluate again
+    replay_source: Path | None = None
 
     @property
     def context(self) -> Path:
         return self.output / "context"
+
+    @property
+    def preloaded(self) -> Path | None:
+        return self.output / "memory/preloaded" if self.task.memory.preload is not None else None
 
     def summary(self, status: str, **extra) -> dict:
         """The run's state for people and scripts; also saved by ``run`` and ``record``."""
@@ -74,7 +74,7 @@ class OpenRun:
             summary["environments"] = environments
         if self.replay is not None:
             summary["reevaluates"] = {
-                "source": json.loads((self.output / "plan.json").read_text())["reevaluates"]["source"],
+                "source": str(self.replay_source),
                 "candidates": [entry["id"] for entry in self.replay],
                 "pending": [entry["id"] for entry in self.replay if not research.measured(entry["id"])
                             and research.candidates.get(entry["id"], {}).get("status") != "invalid"],
@@ -173,26 +173,27 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
         raise ValueError("A run either extends a finished run or re-evaluates its candidates, not both")
     source = None if extends is None else _extension_source(Path(extends), output, saved)
     replayed = None if reevaluates is None else _extension_source(Path(reevaluates), output, saved)
+    reviewer_image = reviewer_image or image
     opened_with = _json({
         "settings": settings.identity(),
         "image": image,
-        "reviewer_image": reviewer_image or image,
-        "task_file": hashlib.sha256(task_file.read_bytes()).hexdigest(),
+        "reviewer_image": reviewer_image,
+        "task_file": sha256_file(task_file),
         **({"extends": _lineage(source)} if source else {}),
-        **({"reevaluates": _lineage(replayed, state=True)} if replayed else {}),
+        **({"reevaluates": _lineage(replayed)} if replayed else {}),
     })
     if saved is not None and any(saved.get(key) != value for key, value in opened_with.items()):
         raise ValueError("Run plan changed; use a fresh output")
 
     created = not output.exists()
     output.mkdir(parents=True, exist_ok=True)
-    opening = _Opening(define, task_file, settings, output, image, reviewer_image or image, opened_with,
+    opening = _Opening(define, task_file, settings, output, image, reviewer_image, opened_with,
                        saved, source, progress, replayed)
     try:
         return opening.open()
     except BaseException:
-        if created and (source is not None or replayed is not None or not any(output.iterdir())):
-            _remove_tree(output)  # a rejected open leaves no new directory behind
+        if created:
+            remove_tree(output)  # a rejected open leaves no new directory behind
         raise
 
 
@@ -237,7 +238,6 @@ class _Opening:
         replay = _replay_plan(self.replayed, Path(task.seed), settings) if self.replayed else None
         ledger = run.starts()
         instructions = inputs.specification()
-        presenter = "default" if task.presenter is None else code_identity(task.presenter)
 
         # Everything an agent may read is copied into the run, sealed by digest
         # in the plan, and checked again whenever the run is reopened.
@@ -247,7 +247,7 @@ class _Opening:
                 staged["memory/preloaded"] = _stage_tree(output, task.memory.preload)
             for name, environment in environments.items():
                 if environment is not None:
-                    staged[name] = harbor_environment.stage(environment, output / f".stage-{uuid4().hex}").files
+                    staged[name] = harbor_environment.stage(environment, output / f".stage-{uuid4().hex}")
             digests = {name: task_context_digest(path) for name, path in staged.items()}
         except BaseException:
             _discard(staged)
@@ -269,7 +269,7 @@ class _Opening:
                                                summarize=_identity(task.memory.summarize)),
                 "environment": {"harbor": environment_identity("environment"),
                                 "workspace": task.environment.workspace},
-                "presenter": presenter,
+                "presenter": _identity(task.presenter) or "default",
                 "transforms": [code_identity(transform) for transform in task.transforms],
                 "original_instructions": original.specification() if task.transforms else None,
             },
@@ -306,10 +306,8 @@ class _Opening:
             progress=self.progress,
             extends=source / "research" if source else None,
         )
-        return OpenRun(task, settings, research, output, self.image, ledger, instructions, inputs,
-                       prepared["environment"],
-                       output / "memory/preloaded" if task.memory.preload is not None else None, presenter,
-                       prepared["review-environment"], replay)
+        return OpenRun(task, settings, research, output, self.image, ledger, inputs,
+                       prepared["environment"], prepared["review-environment"], replay, self.replayed)
 
 
 def _transform(inputs: ResearcherInputs, transforms) -> ResearcherInputs:
@@ -342,7 +340,7 @@ def _place(output: Path, staged: dict, digests: dict) -> None:
             if not same:
                 _discard(staged)
                 raise changed
-            _remove_tree(path)
+            remove_tree(path)
         else:
             final.parent.mkdir(parents=True, exist_ok=True)
             path.rename(final)
@@ -351,8 +349,9 @@ def _place(output: Path, staged: dict, digests: dict) -> None:
 def _evaluation_plan(plan: dict) -> dict:
     """The parts of a plan that saved validity and evaluation evidence depend on.
 
-    Allocation and the researcher's own settings and inputs are left out, so an extension may raise limits or change how researchers work
-    without invalidating evidence. Repeats are in the experiment's contract.
+    Allocation and the researcher's own settings and inputs are left out, so an
+    extension may raise limits or change how researchers work without
+    invalidating evidence. Repeats are in the experiment's contract.
     """
     settings = plan["settings"]
     return {
@@ -373,21 +372,17 @@ def _extension_source(source: Path, output: Path, saved) -> Path:
     if source == output or output.is_relative_to(source) or source.is_relative_to(output):
         raise ValueError("A run made from another run needs its own output, outside the source run")
     if not (source / "plan.json").is_file() or not (source / "research/state.json").is_file():
-        raise ValueError(f"No finished run to extend at {source}")
+        raise ValueError(f"No finished run at {source}")
     if saved is None and output.exists() and any(output.iterdir()):
         raise ValueError("A run made from another run needs a fresh output")
     return source
 
 
-def _lineage(source: Path, state: bool = False) -> dict:
+def _lineage(source: Path) -> dict:
     """The source files a run is bound to; any later change to them is refused."""
-    def sha(path):
-        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
-
-    lineage = {"source": str(source), "plan": sha(source / "plan.json"), "starts": sha(source / "starts.json")}
-    if state:
-        lineage["state"] = sha(source / "research/state.json")
-    return lineage
+    files = {"plan": "plan.json", "starts": "starts.json", "state": "research/state.json"}
+    return {"source": str(source), **{
+        name: sha256_file(source / path) if (source / path).is_file() else None for name, path in files.items()}}
 
 
 def _replay_plan(source: Path, seed: Path, settings: RunSettings) -> list[dict]:
@@ -441,14 +436,7 @@ def _stage_tree(output: Path, source: Path) -> Path:
 def _discard(staged: dict) -> None:
     for path in staged.values():
         if path.exists():
-            _remove_tree(path)
-
-
-def _remove_tree(path: Path) -> None:
-    for current, dirs, files in os.walk(path):
-        for name in dirs:
-            (Path(current) / name).chmod(0o755)
-    shutil.rmtree(path)
+            remove_tree(path)
 
 
 def _stage_context(output: Path, files: dict) -> Path:
@@ -586,7 +574,7 @@ def run_researchers(run: OpenRun) -> dict:
                     context=run.context, history=history,
                     retain=inputs.environment.workspace == "keep",
                     submissions=start.submissions, advance=advance,
-                    record={**manifest, "presenter": run.presenter_identity,
+                    record={**manifest, "presenter": _identity(run.task.presenter) or "default",
                             "environment": run.environment.prepared() if run.environment else None},
                 )})
             finally:

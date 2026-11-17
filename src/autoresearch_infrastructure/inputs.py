@@ -42,14 +42,14 @@ class Memory:
         ``/history/preloaded/``. Its contents are researcher input only: they
         are never treated as results, candidates or spent budget of this run.
     ``conversations``
-        How much of earlier researcher conversations carries over: ``0`` (the
-        default) for none, a positive integer ``k``, or ``"all"``. What ``k``
-        counts depends on ``conversation_mode``. Starts are counted in time
-        order and include failed ones and ones whose candidate was not selected.
+        How much conversation carries over: ``0`` (the default) for none, a
+        positive integer ``k``, or ``"all"``. What ``k`` counts depends on
+        ``conversation_mode``.
     ``conversation_mode``
         ``"files"`` (the default): every start is a fresh conversation that can
         read the conversations of the last ``k`` starts that saved one, as ATIF
-        JSON under ``/history/conversations/``.
+        JSON under ``/history/conversations/``. Starts are counted in time
+        order, including failed ones and ones whose candidate was not selected.
 
         ``"continue"``: one researcher session makes up to ``k`` proposals in
         a row, so it keeps its own conversation: it submits, reads the result,
@@ -94,12 +94,6 @@ class Memory:
             raise ValueError("Memory preload is a directory path")
         if isinstance(self.preload, str):
             object.__setattr__(self, "preload", Path(self.preload))
-
-    @property
-    def is_default(self) -> bool:
-        """Whether a start sees exactly the canonical history, with nothing added."""
-        return (self.history == "all" and self.preload is None and self.conversations == 0
-                and not self.log and self.summarize is None)
 
     def identity(self, preload_digest: str | None = None, summarize: str | None = None) -> dict:
         return {
@@ -176,13 +170,9 @@ class ResearcherInputs:
             title=instructions.title,
         )
 
-    @property
-    def instructions(self) -> Instructions:
-        return Instructions(self.goal, self.rules, self.environment_notes, self.title)
-
     def specification(self) -> str:
         """The task text in the standard layout: also what the reviewer reads."""
-        return self.instructions.render(self.measured)
+        return Instructions(self.goal, self.rules, self.environment_notes, self.title).render(self.measured)
 
 
 @dataclass(frozen=True)
@@ -202,13 +192,9 @@ class Start:
     visible: tuple[str, ...] | None = None
     preloaded: bool = False
     conversations: tuple[str, ...] = ()
-    conversation_mode: str = "files"
     log: bool = False
     summary: bool = False
     submissions: int | None = 1
-
-
-Presenter = Callable[[ResearcherInputs, Start], str]
 
 
 def present(inputs: ResearcherInputs, start: Start) -> str:

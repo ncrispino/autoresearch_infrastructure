@@ -60,7 +60,7 @@ class Task:
         ``Path`` to a file or directory is copied, text is written as is, and
         any other value is saved as JSON.
 
-    Three more set the researcher's inputs beyond the instructions. Their
+    Five more change what the researcher is given or where agents run. Their
     defaults reproduce the standard run:
 
     ``environment``

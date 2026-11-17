@@ -1,4 +1,4 @@
-"""One researcher proposal: a charged agent start that may submit one candidate."""
+"""One researcher start: a charged agent session that submits one candidate, or several in a row."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from string import Template
 from uuid import uuid4
 
 from .coding_agent import native_agent_cost
-from .persistence import write_json
+from .persistence import sha256_file, write_json
 from .source_tree import snapshot, task_context_digest
 
 RESEARCHER_PROTOCOL = Template(Path(__file__).with_name("researcher-protocol.md").read_text())
@@ -38,7 +38,7 @@ def researcher_prompt(goal: str, *, parent_id: str, repeats: int, start=None) ->
                      "before each start: every candidate shown, its idea, verdict and score. |")
         if start.summary:
             rows += "\n| `/history/summary.md` | A summary of the candidates shown, written for this run. |"
-        if start.conversations and start.conversation_mode == "files":
+        if start.conversations:
             rows += ("\n| `/history/conversations/` | The conversations of earlier researchers in this run, "
                      "as ATIF JSON, oldest first. |")
     submissions = 1 if start is None else start.submissions
@@ -82,10 +82,6 @@ class SubmissionRecorder:
         self.limit, self.advance = limit, advance
         self.attempts, self.closed, self.submissions = 0, None, []
 
-    @property
-    def submitted(self) -> bool:
-        return self.attempts > 0
-
     def dispatch_record_candidate(self, session_id, arguments):
         if self.limit == 1 and self.attempts:
             raise ValueError("This invocation already submitted its one candidate; stop")
@@ -107,10 +103,10 @@ class SubmissionRecorder:
         result = self.research.dispatch_record_candidate(
             session_id, {**arguments, "parent_id": self.parent_id, "total_repeats": self.repeats}
         )
-        if self.limit == 1:
-            return result
         entry = {"candidate_id": result.get("candidate_id"), "parent_id": self.parent_id, "next_parent_id": None}
         self.submissions.append(entry)
+        if self.limit == 1:
+            return result
         if self.limit is not None and self.attempts >= self.limit:
             self.closed = "this session's candidates are used"
         else:
@@ -125,9 +121,6 @@ class SubmissionRecorder:
             "remaining": None if self.limit is None else self.limit - self.attempts,
             "note": f"/workspace/candidate/ now holds a fresh copy of {self.parent_id}. Edit it and submit again.",
         }}
-
-
-SingleSubmissionRecorder = SubmissionRecorder
 
 
 def reset_candidate(research, parent_id: str) -> None:
@@ -171,7 +164,13 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
     evidence = research.root / "agent/invocations" / invocation
     inputs = research.root / "agent/inputs" / invocation
     recorder = SubmissionRecorder(research, parent_id, repeats, limit=submissions, advance=advance)
-    status, error, settled, record_path = "failed", None, False, inputs / "inputs.json"
+    status, error, settled = "failed", None, False
+    described = {
+        **(record or {}),
+        "parent_id": parent_id,
+        "parent_hash": research.candidates[parent_id]["source_hash"],
+        "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+    }
     try:
         restored = None
         if retain is not None:
@@ -181,13 +180,8 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
         research.reset_workspace(parent_id)
         inputs.mkdir(parents=True)
         (inputs / "prompt.md").write_text(prompt, encoding="utf-8")
-        write_json(inputs / "inputs.json", {
-            **(record or {}),
-            "parent_id": parent_id,
-            "parent_hash": research.candidates[parent_id]["source_hash"],
-            "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-            "restored": restored,
-        })
+        described["restored"] = restored
+        write_json(inputs / "inputs.json", described)  # saved before the agent runs, completed after
         try:
             agent.run(
                 prompt,
@@ -208,9 +202,9 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
         ledger.finish(key, status=status, cost_usd=cost)
         _index_trajectory(research, evidence)
         _log_start(research, invocation, evidence, status, _export(research, invocation) if retain else None)
-        if recorder.submissions and record_path.is_file():
-            write_json(record_path, {**json.loads(record_path.read_text()), "submissions": recorder.submissions})
-    return {"status": status, "submitted": recorder.submitted, "error": error, "evidence": str(evidence),
+        if inputs.is_dir():
+            write_json(inputs / "inputs.json", {**described, "submissions": recorder.submissions})
+    return {"status": status, "submitted": recorder.attempts > 0, "error": error, "evidence": str(evidence),
             "candidates": [entry["candidate_id"] for entry in recorder.submissions]}
 
 
@@ -227,7 +221,7 @@ def _log_start(research, invocation: str, evidence: Path, status: str, retained:
         "invocation": invocation,
         "status": status,
         "trajectory": trajectory.relative_to(research.root).as_posix() if trajectory.is_file() else None,
-        "trajectory_sha256": _sha256(trajectory) if trajectory.is_file() else None,
+        "trajectory_sha256": sha256_file(trajectory) if trajectory.is_file() else None,
         "retained": retained,
     })
     write_json(research.root / "agent/researcher-starts.json", {"starts": starts})
@@ -279,10 +273,6 @@ def _restore(research) -> dict | None:
         raise ValueError(f"Retained workspace files changed after they were exported: {source}")
     shutil.copytree(source, research.root / "workspace", dirs_exist_ok=True)
     return {"path": exported["path"], "sha256": exported["sha256"]}
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _index_trajectory(research, evidence: Path) -> None:

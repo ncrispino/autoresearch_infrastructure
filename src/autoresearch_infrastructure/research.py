@@ -32,7 +32,7 @@ from .api import (
 )
 from .ledger import StartLedger
 from .lifecycle import EvaluationLifecycle
-from .persistence import digest, write_json
+from .persistence import digest, remove_tree, sha256_file, write_json
 from .review import LLMValidity
 from .snapshots import record_snapshot
 from .source_tree import evaluation_evidence_digest, materialize, python_tree_hash, snapshot
@@ -294,14 +294,10 @@ class Research(EvaluationLifecycle):
             for candidate_id in self.candidates:
                 self.candidate_files(candidate_id)
                 self.evaluation_artifacts(candidate_id)
-            if self.proposals > self.config.max_candidates or (
-                state["solver_trial_starts"] > self.config.max_evaluations
-            ):
-                raise ValueError("The source already used more than the extension's limits")
         except BaseException:
             for item in list(self.output.iterdir()):
                 if item.name != ".writer.lock":
-                    _remove(item)
+                    remove_tree(item) if item.is_dir() else item.unlink()
             raise
         self._save_state()
 
@@ -1020,17 +1016,7 @@ def _import_receipt(source: Path) -> str:
     session = json.loads(state)["sessions"][_SESSION]
     return digest({
         "state": hashlib.sha256(state).hexdigest(),
-        "contract": hashlib.sha256((source / "contract.json").read_bytes()).hexdigest(),
+        "contract": sha256_file(source / "contract.json"),
         "candidates": {cid: record["source_hash"] for cid, record in session["candidates"].items()},
         "selected": session["selected"],
     })
-
-
-def _remove(path: Path) -> None:
-    if path.is_dir() and not path.is_symlink():
-        for current, dirs, _ in os.walk(path):
-            for name in dirs:
-                (Path(current) / name).chmod(0o755)
-        shutil.rmtree(path)
-    else:
-        path.unlink()
