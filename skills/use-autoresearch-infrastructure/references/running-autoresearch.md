@@ -27,8 +27,8 @@ Run settings have four tables:
 | Part | Where it runs | What its image must contain |
 | --- | --- | --- |
 | `ari`, the validity function and a Python evaluator | The host process | |
-| Researcher | A container from `--image` | `python` on the path, for the submission client, and what the chosen agent needs: `tmux` for Terminus-2, the CLI for Codex or Claude Code |
-| Reviewer | A container from `--image` | What the chosen agent needs |
+| Researcher | A container from `--image`, or from the task's Harbor `environment` | `python` on the path, for the submission client, and what the chosen agent needs: `tmux` for Terminus-2, the CLI for Codex or Claude Code |
+| Reviewer | A container from `--reviewer-image` if given, else `--image`, or from the task's `review_environment` | What the chosen agent needs |
 | Solver of an `ari.bases.harbor_harness` task | Its CLI sessions run in containers from `--image` | The `codex` or `claude` CLI |
 | Solver of an `ari.bases.harbor_task_files` task | The Harbor task's own container | What the solver agent needs. Pin a prepared image with `[task] image`. |
 
@@ -128,6 +128,24 @@ docker image inspect ari-solver:local --format '{{.Id}}'
 That [packaged image](../../../docker/solver/README.md) contains Python, tmux,
 Codex and Claude Code. Runs without agents need no image.
 
+The reviewer uses the same image unless you pass `--reviewer-image <image-id>`.
+
+A task can instead give the researcher a Harbor environment with
+`environment=ari.Environment(harbor="<harbor-task-directory>")`, and the
+reviewer one with `review_environment=`. ARI reads only that directory's
+`task.toml` `[environment]` table and its `environment/` directory: a
+Dockerfile, an optional `docker-compose.yaml` for services, or a prebuilt
+`docker_image`. Pin every image by digest. Such an agent needs no `--image`.
+`ari check` validates the definition and builds nothing. Build before the paid
+run, so a build failure costs no start:
+
+```sh
+ari prepare <task-directory> --output <run-directory>
+```
+
+It records the image IDs it built or resolved in `prepared/` inside the run
+directory, and every start uses exactly those. Agents run on local Docker only.
+
 ## Credentials
 
 Set each provider's API key in the environment of the process that runs `ari`.
@@ -188,6 +206,18 @@ If the task, the run settings or the image changed, ARI refuses with
 `Run plan changed; use a fresh output`. A new run directory has a new
 `starts.json`, so its starts begin at zero. Add up the budgets of all the run
 directories you report on.
+
+Two commands start a new run directory from a finished one. Both only read the
+source and start nothing themselves; follow each with `ari run` on the new
+directory.
+
+| The user wants | Command | What carries over |
+| --- | --- | --- |
+| More candidates than a finished run's limits allowed | `ari extend <task> --from <finished> --output <new> --config <larger-limits.toml>` | Candidates, reviews, measurements, selection and every start already used. Limits are cumulative totals. Nothing is evaluated again, so the task, reviewer and image must be unchanged. |
+| The same candidates judged under a changed evaluator or rules | `ari import <task> --from <finished> --output <new>` | The candidates' files, parents and proposals. Each is reviewed and evaluated again, and the new run's limits pay for it. |
+
+Report an extension's budget as cumulative: the source's usage is already
+counted in the new directory.
 
 ## Read the results
 

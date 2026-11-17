@@ -40,6 +40,9 @@ ari run    <task-directory> --output <run-directory> --image <image-id>
 ari view   <run-directory> --html <new-file.html>
 ```
 
+To go past a finished run's limits, or to judge its candidates again under a
+changed task, see [Continue or start again](references/running-autoresearch.md#continue-or-start-again).
+
 ## Decide which case you are in
 
 If the task exists, read its `task.py`, `run.toml` and README. Keep the
@@ -58,7 +61,7 @@ description, follow [Break an existing task down](references/importing-tasks.md)
 It gives the method for sorting a source task into ARI's parts and three worked
 case studies.
 
-An `ari.Task` has four parts and three optional ones. Answer every row before
+An `ari.Task` has four parts and several optional ones. Answer every row before
 writing code.
 
 | `Task` part | Write down |
@@ -70,6 +73,21 @@ writing code.
 | `validity` (optional) | The constraints a function can decide exactly: file names, schema, value ranges. |
 | `cases` (optional) | The names of the fixed inputs that every candidate is evaluated on. The default is one case. |
 | `context` (optional) | Read-only files for the researcher. Keep graders, hidden answers and credentials out of the context and the starting files. |
+
+Five more optional parts change what the researcher is given. Leave them out
+unless the user asks for that behaviour; the defaults are the standard run.
+The [reference](../../reference.md#researcher-inputs) describes each.
+
+| `Task` part | Use it when the user wants |
+| --- | --- |
+| `memory=ari.Memory(...)` | Researchers to see fewer earlier candidates (`history`), records from an earlier run (`preload`), earlier researchers' conversations (`conversations`), or a research log or summary (`log`, `summarize`). By default each researcher is a fresh conversation that sees every earlier candidate. |
+| `environment=ari.Environment(...)` | The researcher to run in a Harbor environment with its own Dockerfile or services (`harbor`), or to start with no files left by earlier researchers (`workspace="reset"`). |
+| `review_environment` | The reviewer to run in its own Harbor environment. |
+| `transforms=[...]` | A study that changes what the researcher is told, such as `ari.transforms.omit_rule(2)`. The reviewer judges the changed rules; the plan keeps the original text. |
+| `presenter` | A different wording or order of the prompt. |
+
+Tell the user when a task uses any of these, because they change what a result
+means.
 
 Review is on by default: a reviewer agent judges every candidate against the
 instructions, after the validity function. The reviewer enforces only what the instructions
