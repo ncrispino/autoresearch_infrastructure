@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .api import Limits, Metric, Objective
+from .inputs import Environment, Memory
 from .instructions import Instructions
 from .ledger import StartLedger
 
@@ -58,6 +59,30 @@ class Task:
         Read-only files for the researcher, by name under ``/context``. A
         ``Path`` to a file or directory is copied, text is written as is, and
         any other value is saved as JSON.
+
+    Five more change what the researcher is given or where agents run. Their
+    defaults reproduce the standard run:
+
+    ``environment``
+        An ``ari.Environment``: a Harbor environment definition for the
+        researcher's container, and whether files outside the candidate survive
+        between starts.
+    ``memory``
+        An ``ari.Memory``: which earlier candidates a start sees, preloaded
+        records, and earlier researcher conversations.
+    ``presenter``
+        ``(ResearcherInputs, Start) -> str``: the prompt one start reads. The
+        default is ``ari.present``, the standard layout. The reviewer always
+        reads the standard task text, whatever the presenter shows.
+    ``transforms``
+        Functions ``ResearcherInputs -> ResearcherInputs`` applied in order,
+        such as ``ari.transforms.omit_rule(2)``: a recorded change to what the
+        researcher is told. The reviewer judges the changed rules, as the
+        monitor reads the same inputs as the run; the plan keeps the original
+        text for relabeling afterwards.
+    ``review_environment``
+        A Harbor task directory whose environment the reviewer runs in, instead
+        of the ``--image`` (or ``--reviewer-image``) container.
     """
 
     objective: Metric | Objective
@@ -67,12 +92,24 @@ class Task:
     validity: Callable | None = None
     cases: tuple[str, ...] = ("default",)
     context: dict[str, Any] = field(default_factory=dict)
+    environment: Environment = field(default_factory=Environment)
+    memory: Memory = field(default_factory=Memory)
+    presenter: Callable | None = None
+    transforms: tuple[Callable, ...] = ()
+    review_environment: Path | str | None = None
 
     def __post_init__(self):
         if isinstance(self.instructions, str):
             object.__setattr__(self, "instructions", Instructions.parse(self.instructions))
         if not isinstance(self.instructions, (Instructions, Path)):
             raise ValueError("A task needs instructions: an ari.Instructions, Markdown text, or a file path")
+        if not isinstance(self.environment, Environment) or not isinstance(self.memory, Memory):
+            raise ValueError("environment is an ari.Environment and memory an ari.Memory")
+        if self.presenter is not None and not callable(self.presenter):
+            raise ValueError("presenter is a function of (inputs, start) returning the prompt")
+        object.__setattr__(self, "transforms", tuple(self.transforms))
+        if any(not callable(transform) for transform in self.transforms):
+            raise ValueError("transforms are functions of ResearcherInputs returning ResearcherInputs")
 
     def resolved(self, directory: Path) -> Task:
         """A copy with every relative path resolved against ``directory`` and its instructions read."""
@@ -84,7 +121,14 @@ class Task:
             instructions = Instructions.parse(path.read_text(encoding="utf-8"))
         context = {name: directory / value if isinstance(value, Path) else value
                    for name, value in self.context.items()}
-        return replace(self, seed=directory / self.seed, instructions=instructions, context=context)
+        environment, memory = self.environment, self.memory
+        if environment.harbor is not None:
+            environment = replace(environment, harbor=directory / environment.harbor)
+        if memory.preload is not None:
+            memory = replace(memory, preload=directory / memory.preload)
+        review = None if self.review_environment is None else directory / self.review_environment
+        return replace(self, seed=directory / self.seed, instructions=instructions, context=context,
+                       environment=environment, memory=memory, review_environment=review)
 
 
 @dataclass(frozen=True)
@@ -179,8 +223,9 @@ class Run:
     """
 
     def __init__(self, settings: RunSettings, output: Path, image: str | None = None, *,
-                 directory: Path | None = None, identity=None):
+                 directory: Path | None = None, identity=None, continues: Path | None = None):
         self.settings, self.output, self.image = settings, Path(output), image
+        self._continues = Path(continues) if continues is not None else None
         self.directory = Path(directory) if directory is not None else Path.cwd()
         self._identity = identity if identity is not None else settings.identity()
         self._ledger: StartLedger | None = None
@@ -195,7 +240,12 @@ class Run:
         if self._ledger is None:
             limits = {**self.settings.starts, **more}
             if limits:
-                self._ledger = StartLedger(self.output / "starts.json", limits=limits, identity=self._identity)
+                path = self.output / "starts.json"
+                if self._continues is not None and self._continues.is_file():
+                    self._ledger = StartLedger.continued(path, self._continues, limits=limits,
+                                                         identity=self._identity)
+                else:
+                    self._ledger = StartLedger(path, limits=limits, identity=self._identity)
         elif more:
             raise ValueError("Name a task's start kinds in one call to run.starts(...)")
         return self._ledger

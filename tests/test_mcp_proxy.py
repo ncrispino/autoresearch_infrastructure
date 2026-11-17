@@ -141,3 +141,12 @@ def test_compact_feedback_preserves_measured_aggregate_and_selection():
     })
     assert result["evaluation"] == evaluation
     assert result["selected"] == "candidate-0002" and result["remaining_evaluations"] == 4
+
+
+def test_compact_feedback_keeps_whether_the_session_may_submit_again():
+    following = {"parent_id": "candidate-0002", "remaining": 2, "note": "Edit it and submit again."}
+    kept = mcp_proxy._feedback({"candidate_id": "candidate-0003", "evidence": {}, "next": following})
+    assert kept["next"] == following
+    stopped = mcp_proxy._feedback({"candidate_id": "candidate-0004", "evidence": {}, "next": None,
+                                   "stopped": "candidate limit reached"})
+    assert stopped["next"] is None and stopped["stopped"] == "candidate limit reached"

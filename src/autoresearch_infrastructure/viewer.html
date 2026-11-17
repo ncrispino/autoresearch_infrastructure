@@ -355,7 +355,7 @@
       const completionLabel = s.role === "research" ? "Measurement completed" : "Task completed";
       const d = document.querySelector("#detail");
       d.replaceChildren(
-        el("h2", c.id + " · " + c.status),
+        el("h2", c.id + " · " + c.status + (c.imported ? " · imported" : "")),
         el(
           "p",
           "Source " +
@@ -490,7 +490,7 @@
           index + 1,
           b,
           c.parent_id || "seed",
-          c.status,
+          c.imported ? c.status + " (imported)" : c.status,
           e?.validity,
           e?.evaluation,
           e?.total_repeats,
@@ -527,6 +527,15 @@
             `${d.run.mode} · evaluations charged ${d.run.solver_trial_starts} / ${d.run.max_solver_trial_starts} · reserved ${d.run.reserved_solver_trial_starts}`,
           ),
         );
+      if (d.run.extends)
+        document
+          .querySelector("#summary")
+          .append(
+            el(
+              "p",
+              `Extends ${d.run.extends.source}: ${d.run.extends.imported_candidates} candidates and their evidence imported`,
+            ),
+          );
       document
         .querySelector("#warnings")
         .replaceChildren(...d.warnings.map((x) => el("p", x)));

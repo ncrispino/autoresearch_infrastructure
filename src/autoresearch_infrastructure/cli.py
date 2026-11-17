@@ -13,6 +13,9 @@ def main(argv=None):
         "check": "Open the task and settings and print the budget. Starts nothing.",
         "record": "Save the current workspace as a candidate, then review and evaluate it.",
         "run": "Measure the baseline, then start researchers until a budget runs out. May incur charges.",
+        "extend": "Continue a finished run in a new output with larger limits. Starts nothing.",
+        "prepare": "Build or resolve the task's Harbor environments and record their images. Starts no agent.",
+        "import": "Start a new run that reviews and evaluates a finished run's candidates again. Starts nothing.",
     }
     for name, summary in actions.items():
         command = commands.add_parser(name, help=summary, description=summary)
@@ -20,7 +23,12 @@ def main(argv=None):
         command.add_argument("--output", type=Path, required=True, help="Run directory")
         command.add_argument("--config", type=Path, help="Run settings; default is run.toml beside the task")
         command.add_argument("--image", help="Immutable image ID for the researcher and reviewer")
+        command.add_argument("--reviewer-image", help="Immutable image ID for the reviewer only")
         command.add_argument("--json", action="store_true", help="Print one JSON summary and no progress display")
+        command.set_defaults(source=None)
+        if name in ("extend", "import"):
+            command.add_argument("--from", dest="source", type=Path, required=True,
+                                 help="The finished run directory to read; it is not modified")
     for name, summary in {
         "view": "Export the results of a run as one HTML page.",
         "inspect": "Print the results of a run as JSON.",
@@ -51,10 +59,14 @@ def _task_command(args) -> int:
 
     directory = args.task if args.task.is_dir() else args.task.parent
     config = args.config or (directory / "run.toml" if (directory / "run.toml").is_file() else None)
-    action = {"check": launch.check_run, "record": launch.record_workspace, "run": launch.run_researchers}[args.command]
+    action = {"check": launch.check_run, "record": launch.record_workspace, "run": launch.run_researchers,
+              "extend": launch.check_run, "import": launch.check_run, "prepare": launch.prepare_run}[args.command]
     try:
         with TerminalProgress(enabled=not args.json) as progress:
-            run = launch.open_run(args.task, config, args.output, args.image, progress=progress)
+            run = launch.open_run(args.task, config, args.output, args.image, progress=progress,
+                                  extends=args.source if args.command == "extend" else None,
+                                  reevaluates=args.source if args.command == "import" else None,
+                                  reviewer_image=args.reviewer_image)
             with run.research:
                 summary = action(run)
     except (ValueError, RuntimeError, OSError) as error:
@@ -64,7 +76,7 @@ def _task_command(args) -> int:
         print(json.dumps(summary))
     else:
         _print(summary)
-    return 0 if summary["status"] in {"checked", "recorded", "completed"} else 1
+    return 0 if summary["status"] in {"checked", "prepared", "recorded", "completed"} else 1
 
 
 def _print(summary: dict) -> None:
@@ -81,6 +93,12 @@ def _print(summary: dict) -> None:
         limits = summary["start_limits"]
         print("Agent starts:", ", ".join(f"{kind} {used} of {limits[kind]}" for kind, used in summary["starts"].items()))
     print("Review:", summary["review"])
+    if "extends" in summary:
+        lineage = summary["extends"]
+        print(f"Extends: {lineage['source']} ({len(lineage['imported_candidates'])} candidates imported)")
+    if "reevaluates" in summary:
+        source = summary["reevaluates"]
+        print(f"Re-evaluates: {source['source']} ({len(source['pending'])} candidates still to evaluate)")
     print("Workspace:", summary["workspace"])
     print("Viewer:", summary.get("viewer") or f"ari view {summary['output']} --html <new-file.html>")
 

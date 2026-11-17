@@ -93,7 +93,9 @@ container holding a copy of the best candidate so far. The researcher edits the
 copy and submits it through one tool, `record_candidate`. ARI saves the
 submission, has it reviewed, evaluates it, and returns the result to the
 researcher. This repeats until a limit in the settings is reached. Running the
-command again continues with whatever budget is left.
+command again continues with whatever budget is left. To go past a finished
+run's limits, `ari extend` continues it in a new directory without re-running
+anything; see [Extend a finished run](reference.md#extend-a-finished-run).
 
 The limits count candidates and evaluations. Agent starts follow from them: one
 review for each candidate and one researcher for each candidate after the
@@ -170,6 +172,47 @@ has to know a rule to obey it. Three
 optional parts refine a task: a `validity` function for rules that code can
 decide exactly, `cases` to evaluate on several fixed inputs, and `context` files
 for the researcher to read.
+
+## What the researcher sees, and what checks it
+
+The researcher works from four inputs:
+
+| Input | What it holds | Where it comes from |
+| --- | --- | --- |
+| Objective | What to change and what should get better, with the generated "What is measured" list | `instructions` → Objective, and the task's `objective` |
+| Rules | What a candidate must and must not do | `instructions` → Constraints: Rules |
+| Environment | The starting files, the read-only context files, and the container's tools and limits | `seed`, `context` and `--image`, described in `instructions` → Constraints: Environment |
+| Memory | Every earlier candidate: its proposal notes, diff, review and scores | `/history/`, written by ARI |
+
+Two parts check its work. Both are fixed for the run and run outside the
+researcher's container:
+
+- The **evaluator** measures each candidate, and the task's `objective` ranks
+  candidates by those measurements.
+- The **monitor** decides whether a candidate is valid: the `validity` function
+  first, then the reviewer, which judges each rule the researcher was given.
+
+The word *objective* names two things. `objective=` in `ari.Task` is the metric
+and how candidates are ranked, and belongs with the evaluator. `objective=` in
+`ari.Instructions` is the written goal the researcher reads.
+
+**Memory.** Each researcher start is a fresh conversation. It sees earlier work
+only through the parent candidate's files in `/workspace/candidate/`, through
+`/history/`, and through any files it left elsewhere under `/workspace/`.
+`/history/` starts with the baseline. After each proposal, ARI adds the
+candidate with its proposal notes (hypothesis and mechanism), diff, review,
+scores and evaluation trajectories. Earlier researchers' own conversations are
+not included. A task can change all of this with `ari.Memory` (fewer candidates,
+preloaded records, earlier conversations, or one session that makes several
+proposals) and `ari.Environment` (a Harbor
+environment definition, or a workspace reset between starts); see
+[Researcher inputs](reference.md#researcher-inputs).
+
+**Changing what the researcher is told.** The reviewer judges against the rules
+and text the researcher was given, so a run with reworded or omitted rules is
+reviewed against those. To judge its candidates against other rules afterwards,
+use the saved outputs listed under
+[Relabel a finished run](reference.md#relabel-a-finished-run).
 
 ## Build on a Harbor task
 

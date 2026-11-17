@@ -51,12 +51,7 @@ class StartLedger:
             raise ValueError("Start limits must be nonnegative integers")
         self.path = Path(path).resolve()
         self.limits = limits
-        if isinstance(identity, str):
-            if len(identity) != 64 or any(c not in "0123456789abcdef" for c in identity):
-                raise ValueError("An opaque allocation identity must be a SHA256 hex digest")
-            self.identity_hash = identity
-        else:
-            self.identity_hash = digest(identity)
+        self.identity_hash = _identity_hash(identity)
         with self._locked():
             if self.path.exists():
                 self._read()
@@ -70,6 +65,31 @@ class StartLedger:
                         "starts": {},
                     },
                 )
+
+    @classmethod
+    def continued(cls, path: Path, source: Path, *, limits: dict[str, int], identity: dict | str) -> StartLedger:
+        """A ledger for an extension: every start of ``source`` stays counted under new limits.
+
+        Failed, interrupted and unknown-cost starts are kept as they were; an
+        extension never refunds a start. ``source`` is only read.
+        """
+        path = Path(path)
+        if not path.exists():
+            data = json.loads(Path(source).read_text())
+            missing = sorted(set(data["counts"]) - set(limits))
+            if missing:
+                raise ValueError(f"The extension sets no start limit for {missing}, which the source used")
+            over = sorted(kind for kind, used in data["counts"].items() if used > limits[kind])
+            if over:
+                raise ValueError(f"The source already used more {over} starts than the extension allows")
+            write_json(path, {
+                "limits": limits,
+                "identity_hash": _identity_hash(identity),
+                "counts": {kind: data["counts"].get(kind, 0) for kind in limits},
+                "starts": data["starts"],
+                "continues": {"source": str(Path(source).resolve()), "limits": data["limits"]},
+            })
+        return cls(path, limits=limits, identity=identity)
 
     @contextmanager
     def _locked(self):
@@ -156,3 +176,11 @@ class StartLedger:
     def remaining(self, kind: str) -> int:
         """Starts of one kind still available."""
         return self.limits[kind] - self.snapshot()["counts"][kind]
+
+
+def _identity_hash(identity: dict | str) -> str:
+    if isinstance(identity, str):
+        if len(identity) != 64 or any(c not in "0123456789abcdef" for c in identity):
+            raise ValueError("An opaque allocation identity must be a SHA256 hex digest")
+        return identity
+    return digest(identity)

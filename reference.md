@@ -53,16 +53,19 @@ A task has four parts:
 | --- | --- |
 | `seed` | Directory of starting files. Paths are relative to the task file; the default is `seed/` beside it. |
 | `instructions` | What the researcher is told: an `ari.Instructions(objective=..., rules=[...], environment=[...])`, or Markdown with `## Objective` and `## Constraints` (`### Rules`, `### Environment`). A `Path` names a Markdown file; the default is `instructions.md` beside the task file. ARI lays the instructions out the same way for every task and adds what the task already knows: the starting files, the metric and its direction, tie-breakers, bounds, and the number of cases and repeats. Do not restate the direction in prose. |
-| `objective` | The `Metric` to improve, or an `Objective`. See [Metrics, objectives and bounds](#metrics-objectives-and-bounds). |
+| `objective` | The `Metric` to improve, or an `Objective`: what is measured and how candidates are ranked. This is not the written goal in `Instructions.objective`. See [Metrics, objectives and bounds](#metrics-objectives-and-bounds). |
 | `evaluator` | Measures one candidate on one case. See [Write an evaluator](#write-an-evaluator). |
 
-Three more are optional:
+Six more are optional:
 
 | Optional part | Meaning |
 | --- | --- |
 | `validity` | A function that decides the constraints code can decide exactly. It runs before the reviewer. See [Validity](#validity). |
 | `cases` | Names of the cases: the fixed inputs every candidate is evaluated on. The default is one case named `default`. |
 | `context` | Read-only files for the researcher, by file name under `/context`. A `Path` is copied, a string is written as text, and any other value is saved as JSON. Context is bounded to 256 MiB per file, 512 MiB total and 2,000 regular files; symbolic links, hard-linked files and special files are rejected. |
+| `environment` | An `ari.Environment`: a Harbor environment definition for the researcher's container, and whether files outside the candidate survive between starts. See [Researcher inputs](#researcher-inputs). |
+| `memory` | An `ari.Memory`: which earlier candidates a researcher sees, preloaded records, and earlier researcher conversations. See [Researcher inputs](#researcher-inputs). |
+| `presenter` | A function `(ResearcherInputs, Start) -> str` that writes the prompt of one start. The default, `ari.present`, is the standard layout. |
 
 `task(run)` can read the run before it builds its evaluator. `run.settings` holds
 the parsed run settings, `run.output` is the run directory and `run.image` is the
@@ -112,15 +115,21 @@ with agents, and [local.toml](examples/curve-fitting/local.toml) is one without.
 | `ari check TASK --output DIR` | Opens the task and prints its budget and who reviews. Starts nothing. |
 | `ari record TASK --output DIR` | Saves the workspace as a candidate, then reviews and evaluates it. Use it for your own edits. |
 | `ari run TASK --output DIR` | Evaluates the baseline, then starts researchers until a budget runs out. This calls your models. |
+| `ari extend TASK --from SRC --output DIR` | Continues the finished run `SRC` in a new directory with the larger limits of `--config`. Starts nothing; run `ari run` on `DIR` next. See [Extend a finished run](#extend-a-finished-run). |
+| `ari import TASK --from SRC --output DIR` | Starts a new run that reviews and evaluates the candidates of `SRC` again under this task. Starts nothing; `ari run` on `DIR` does the work. |
+| `ari prepare TASK --output DIR` | Builds or resolves the task's Harbor environments and records their images. Starts no agent. `run` and `record` do this first themselves. |
 | `ari view DIR --html FILE` | Writes the results as one HTML page. `FILE` must not exist yet. |
 | `ari inspect DIR` | Prints the results as JSON. |
 
 `TASK` is a directory containing `task.py`, or the file itself. `DIR` is the run
-directory. The first three commands also take:
+directory. The commands that open a task also take:
 
 - `--config FILE`: the run settings. The default is `run.toml` beside the task.
 - `--image ID`: the container image for the researcher and reviewer, required
-  when the settings have either. It must be an image ID (`sha256:...`) or a digest
+  when the settings have either. A researcher with a Harbor `environment`, or a
+  reviewer with a `review_environment`, does not use it.
+- `--reviewer-image ID`: a separate image for the reviewer. Without it the
+  reviewer uses `--image`, as before. It must be an image ID (`sha256:...`) or a digest
   (`repository@sha256:...`), so a moved tag cannot change a run.
 - `--json`: print one JSON summary and turn off the progress display.
 
@@ -144,13 +153,58 @@ tampering with a run's staged context blocks resume.
 The exit status is 0 on success, 1 when a recorded candidate was not measured or
 a run failed, and 2 when the task or settings could not be opened.
 
+### Extend a finished run
+
+Three ways to reuse a run differ in what they keep:
+
+| You want | Use | What happens |
+| --- | --- | --- |
+| To finish the budget a run already has | `ari run` on the same directory | Same-plan resume. Any change to the plan is refused. |
+| More candidates or evaluations than a finished run allowed | `ari extend` into a new directory | The source is copied and verified. Its candidates keep their IDs, parents, reviews, measurements and selection, and their evidence is reused without new calls. |
+| To judge saved candidates under a changed evaluator or rules | `ari import` into a new directory | The source's candidates are recorded again with the same IDs, parents and proposals, then reviewed and evaluated under the new task before any researcher starts. No evidence is reused, and the new run's limits pay for it. |
+
+```sh
+ari extend examples/curve-fitting --from runs/curve --output runs/curve-more \
+  --config more.toml --image <image-id>
+ari run examples/curve-fitting --output runs/curve-more --image <image-id>
+```
+
+The limits in `more.toml` are cumulative totals, not additions, and may not be
+lower than the source's. Every start the source used, including failed starts
+and starts of unknown cost, stays counted. The next researcher starts from the
+imported selected candidate and sees the imported history under `/history`.
+
+Evidence is reused only if everything it depends on is unchanged: the task file,
+the image, the `[reviewer]` and `[task]` tables, the repeat limits, the
+instructions, the context and the package source. Otherwise `ari extend` names
+the fields that changed and creates nothing. The researcher's own settings,
+`[researcher]`, the memory, the environment and the presenter may change.
+
+Before the new directory is usable, ARI checks every snapshot, result and
+artifact of the source against its saved hash. A tampered source, or one with an
+interrupted evaluation, is refused and leaves no new directory. The source is
+only read. Its `plan.json` and `starts.json` are bound into the new plan, so
+reopening the extension after the source changed is refused. The viewer shows
+the source and marks imported candidates.
+
+`ari import` needs the source's baseline to equal the task's starting files and
+limits large enough for every source candidate. Each snapshot is checked against
+its saved hash first. Re-recorded candidates keep the source's proposal, with
+`reevaluated_from` added. Reopening the new directory finds its source in
+`plan.json`, refuses a changed source, and continues any re-evaluation that was
+interrupted.
+
 ## Run directory
 
 ```text
 DIR/
-  plan.json          the task and settings this run was opened with
+  plan.json          the task, settings and researcher inputs this run was opened with
   starts.json        the ledger, when the run has agents
   context/           the researcher's read-only files
+  memory/preloaded/  preloaded records, when the memory has them
+  environment/       the researcher's Harbor environment, when the task has one
+  review-environment/  the reviewer's Harbor environment, when the task has one
+  prepared/          the image identities each environment was prepared with
   research/          the ari.Research output
     state.json
     sessions/research/
@@ -163,6 +217,9 @@ DIR/
         validity/            verdicts
         evaluations/         results and artifacts
       agent/invocations/     researcher logs and trajectories
+      agent/inputs/          each start's exact prompt and input manifest
+      agent/retained/        files exported after each start, when they are kept
+      agent/researcher-starts.json   every researcher start, oldest first
   summary.json       the outcome of the last run or record
   viewer.html        the same results as a page
 ```
@@ -280,6 +337,12 @@ package source and the Python version. If any of them changes, opening fails wit
 `Experiment setup changed; use a fresh output`. ARI cannot see inputs that your
 functions load at run time, so put the versions of datasets, models and
 dependencies in `evaluation_config`.
+
+Evidence is keyed by an evaluation contract that leaves out allocation: the
+candidate, evaluation and parallel limits and the review budget. Resuming the
+same output with different limits is still refused. To continue a finished
+experiment under larger limits, pass `extends=` the finished output when
+creating a new one; `ari extend` does this for a run directory.
 
 One process writes an output at a time. A forked child must open its own
 `Research`.
@@ -428,6 +491,23 @@ Creating an `LLMValidity` starts nothing.
 `FileValidity(reviewer, criteria=...)` in `autoresearch_infrastructure.review`
 applies the same verdict conditions to your own `reviewer(candidate,
 verdict_path, prompt)` function. You are responsible for isolating it.
+
+### Relabel a finished run
+
+The reviewer is part of the run: it judges against the rules and text the
+researcher was given. A study that changes those, for example by rewording or
+leaving out a rule, may also want every candidate judged against the original
+rules afterwards. ARI has no command for this, but a run saves what it needs.
+Paths are relative to the run directory:
+
+| Saved output | What it holds |
+| --- | --- |
+| `plan.json`, key `instructions` | The exact text the researcher read |
+| `research/sessions/research/history/candidates/<id>/snapshot/` | Each candidate's files, frozen. The baseline is `candidate-0001`. |
+| `research/sessions/research/history/candidates/<id>/validity/<contract>/attempt-NNNN/assignment.json` | The criteria and task specification each review used |
+| `research/sessions/research/history/index.json` | Every candidate's parent, proposal, verdict and scores |
+
+Candidates the reviewer rejected were not evaluated, so they have no scores.
 
 ## Write an evaluator
 
@@ -756,7 +836,8 @@ verified integrations.
 `ari run` is built from two pieces that you can call yourself.
 `ari.CodingAgent(agent=..., image=...)` runs one Harbor agent as a researcher.
 `search.propose` uses one `researcher` start, resets the workspace to the parent
-candidate, runs the agent and accepts at most one submission.
+candidate, runs the agent and accepts one submission, or several with
+`submissions=`.
 
 ```python
 from autoresearch_infrastructure.search import propose, researcher_prompt
@@ -794,9 +875,189 @@ The researcher submits with the `record_candidate` tool, which ARI serves as an
 MCP server named `autoresearch`. A terminal agent can run
 `python /opt/autoresearch/mcp_proxy.py --call FILE.json` instead. A submission
 needs a `proposal` with a `hypothesis` and a `mechanism`. The controller fixes the
-parent and the repeat count. The
+parent and the repeat count.
+
+By default every proposal starts a new agent, whether the previous candidate
+was valid, invalid or never submitted. No conversation carries over, and a
+researcher learns from earlier work only through:
+
+- its parent's files, copied into `/workspace/candidate/`;
+- `/history/`, the run's memory, which ARI rewrites after each candidate;
+- files it or an earlier researcher left elsewhere under `/workspace/`, which
+  `propose` does not reset. `/tmp/` is emptied between starts.
+
+The researchers' own trajectories are saved under `agent/invocations/` but are
+not mounted into `/history/`. [Researcher inputs](#researcher-inputs) describes
+how a task changes each of these.
+
+The
 [launch guide](skills/use-autoresearch-infrastructure/references/running-autoresearch.md)
 describes where each process runs.
+
+## Researcher inputs
+
+A researcher is given four inputs. `open_run` resolves a task into one
+`ari.ResearcherInputs` value and records it in `plan.json`:
+
+| Input | Field | From the task |
+| --- | --- | --- |
+| Objective | `goal`, the written goal, and `measured`, the "What is measured" list | `Instructions.objective`, and the task's `objective` |
+| Rules | `rules` | `Instructions.rules` |
+| Environment | `environment_notes`, the description, and `environment`, the runtime | `Instructions.environment`, `seed`, `context` and `environment` |
+| Memory | `memory`, the policy | `memory` |
+
+`measured` is generated from the metric definition, so the text cannot disagree
+with what is scored. The evaluator and the reviewer are not inputs and do not
+change with them: the reviewer always reads the standard task text,
+`inputs.specification()`, whatever a presenter shows the researcher.
+
+### Memory
+
+```python
+ari.Task(..., memory=ari.Memory(history=3, conversations=2))
+```
+
+| Field | Values | Effect |
+| --- | --- | --- |
+| `history` | `"all"` (default), `"none"`, or `n` | Which earlier candidates appear under `/history`: all, none, or the `n` most recently recorded. |
+| `preload` | A directory | Earlier experiment records, such as another run's `history/`, shown under `/history/preloaded/`. They are copied into the run and sealed in the plan. They never become candidates, results or spent budget. |
+| `conversations` | `0` (default), `k`, or `"all"` | How much conversation carries over. What `k` counts depends on `conversation_mode`. |
+| `conversation_mode` | `"files"` (default) or `"continue"` | `"files"`: every start is a fresh conversation that can read the conversations of the last `k` starts that saved one, as ATIF JSON under `/history/conversations/`. Starts are counted in time order, including failed starts and starts whose candidate was not selected. `"continue"`: one researcher session makes up to `k` proposals in a row, keeping its own conversation. See below. |
+| `log` | `False` (default) or `True` | Adds `/history/log.md`, a research log ARI writes from its own records before each start: every visible candidate's parent, hypothesis, mechanism, verdict and score. |
+| `summarize` | A function `(index) -> str` | Shown as `/history/summary.md`. It receives the visible `/history/index.json` content. It is trusted code: its identity goes into the plan and its output's hash into each start's record. |
+
+With `conversation_mode="continue"` and `conversations=3`, one researcher
+session submits a candidate, reads the result, and proposes again, up to three
+times. Then the next start is a fresh conversation. `"all"` sets no limit of
+its own, so one session can use the whole budget. This works with any agent.
+
+- After each submission, ARI puts a fresh copy of the selected candidate in
+  `/workspace/candidate/` and updates `/history`. The selected candidate is the
+  best so far, which may not be the one just submitted.
+- The reply to `record_candidate` has a `next` field. It names the `parent_id`
+  the session now starts from, or is null with the reason in `stopped`: the
+  session's candidates are used, or a budget ran out.
+- One session is one `researcher` start, however many candidates it records.
+  The candidate, evaluation and reviewer limits still apply to each candidate.
+- The agent's time limit covers the whole session, including the wait for each
+  review and evaluation, so raise `override_timeout_sec` to fit `k` rounds.
+- If a session fails partway, the candidates it recorded stay, and the next
+  start is a fresh conversation.
+- Nothing shortens a long conversation, so `"all"` can outgrow a model's
+  context on a long run.
+
+With the default memory, a start mounts the canonical history. Any other policy
+builds a separate view for that start, so a hidden record is not reachable
+through links, snapshots or trajectories, and the controller's evidence is never
+edited. The view is deleted after the start. Whatever the memory shows, the
+controller's selection, evidence and budgets are unchanged.
+
+### Environment
+
+```python
+ari.Task(..., environment=ari.Environment(harbor="researcher-env", workspace="reset"))
+```
+
+A start's container, its services and their volumes are deleted when the start
+ends. `workspace` says what survives besides the candidate and the memory:
+
+| `workspace` | Before a start | After a start |
+| --- | --- | --- |
+| `"keep"` (default) | The workspace is cleared, then the previous start's export is restored after its seal is checked | Files left under `/workspace/` outside `candidate/` are copied to `agent/retained/<invocation>/` and sealed. Links and special files are dropped and listed |
+| `"reset"` | The workspace is cleared | Nothing is kept |
+
+A changed export is refused before the next start. An export larger than the
+context limits is not kept, and its record says why.
+
+`harbor` names a Harbor task directory. ARI uses only its `task.toml`
+`[environment]` table and its `environment/` directory: a Dockerfile, an
+optional `docker-compose.yaml` for services, or a prebuilt `docker_image`.
+Resources, network policy, environment variables and healthchecks are Harbor's
+own settings. The Harbor task's instruction, tests and solution are ignored.
+
+ARI adds only what the experiment needs: the working directory, the skills
+directory, its isolation overlay and the mounts for the candidate, context,
+history and submission. A definition may not set `workdir` or `skills_dir`.
+Every image, in `docker_image`, Dockerfile `FROM` lines and compose services,
+must be pinned by digest. Compose may not change the main service's user,
+mounts, capabilities or network, and services may not be privileged, bind host
+paths, use the host network or be built. The definition is copied into the run
+and its hash recorded.
+
+An environment goes through three stages:
+
+1. `ari check` validates the definition and starts nothing.
+2. `ari prepare`, or the first step of `run` and `record`, builds the
+   Dockerfile once with `docker build`, or resolves the pinned `docker_image`,
+   and writes `prepared/<environment>.json` with the actual image ID of the main
+   container and every sidecar's image. Every start's record repeats them. If
+   the prepared image is later missing, ARI refuses rather than rebuild a
+   possibly different image.
+3. Each start uses Harbor's own lifecycle on the prepared image: start the
+   services, wait for health checks, set up the agent, run it, then delete
+   everything with its volumes.
+
+Agents run on Harbor's local Docker backend. Submission uses a host socket and
+bind mounts, which remote Harbor providers do not offer, so a definition that
+needs another provider, such as a TPU, is refused.
+
+The reviewer runs in `--reviewer-image`, in `--image`, or in its own
+`review_environment`, a Harbor task directory prepared the same way. Changing
+the researcher's environment never changes the reviewer's.
+
+### Presentation and the record of each start
+
+A presenter turns the inputs and one `ari.Start` into the prompt. `Start` holds
+the start number, the parent, the repeats, the visible candidates, and whether
+preloaded records or conversations are present. The default, `ari.present`,
+writes the standard layout; with the default memory its text is unchanged.
+
+A custom presenter can reword, reorder, omit or add to what the researcher is
+told. That is an experimental change, so the presenter's code identity goes into
+the plan.
+
+To change the content instead, pass `Task(transforms=[...])`. Each transform
+maps `ResearcherInputs` to `ResearcherInputs`, in order, before anything is
+shown:
+
+```python
+ari.Task(..., transforms=[ari.transforms.omit_rule(2), ari.transforms.omit_measured()])
+```
+
+`ari.transforms` has `omit_rule`, `reword_rule`, `add_rule`, `replace_goal`,
+`add_environment_note` and `omit_measured`. Rules are numbered from 1. A
+transform may not change the memory or the environment. The monitor is part of
+the run, so the reviewer judges the changed rules and reads the changed text.
+The plan records each transform with its arguments, and the original task text
+as `inputs.original_instructions`, for relabeling afterwards. Scoring never
+changes. Every start saves, under `agent/inputs/<invocation>/`:
+
+- `prompt.md`: the exact prompt.
+- `inputs.json`: the parent and its hash, the prompt's hash, the visible
+  candidates with their hashes, the history index's hash, the conversations
+  mounted as files with their hashes, the presenter, the prepared environment's
+  images, the files restored into the workspace, and each candidate the start
+  recorded.
+
+### What is configurable
+
+| Control | Status | What ARI adds beyond Harbor |
+| --- | --- | --- |
+| Written goal, rules, environment notes | Now: `instructions` | The fixed layout and generated "What is measured" facts |
+| Wording and order of the prompt | Now: `presenter` | Recorded per start, kept away from the reviewer |
+| Changing the content the researcher is told | Now: `transforms`, `ari.transforms` | Recorded with the original text |
+| Starting files, context | Now: `seed`, `context` | Candidates, baseline and sealed copies |
+| Container, services, resources, network | Now: `environment.harbor` | Harbor's own definition; ARI adds isolation, mounts and submission |
+| Files surviving between starts | Now: `environment.workspace` | Sealed export and restore around the controller-managed candidate |
+| Building and recording images | Now: `ari prepare` | Actual main and sidecar image identities, reused by every start |
+| Which earlier candidates are visible | Now: `memory.history` | Separate per-start views over trusted evidence |
+| Preloaded records | Now: `memory.preload` | Sealed copies that never count as evidence |
+| Earlier researcher conversations | Now: `memory.conversations`, `memory.conversation_mode` | Which starts' conversations are read as files, or how many proposals one session makes in a row |
+| Research log and summaries | Now: `memory.log`, `memory.summarize` | Written from trusted records; summaries recorded |
+| Reviewer environment | Now: `--reviewer-image`, `review_environment` | Independent of the researcher's |
+| Continuing a finished run | Now: `ari extend` | Verified import, cumulative budgets, lineage |
+| Re-evaluating a finished run's candidates | Now: `ari import` | Same IDs, parents and proposals under a new contract |
+| Remote Harbor providers | Not supported | Needs a submission path without a host socket; refused explicitly |
 
 ## Viewer
 
@@ -824,7 +1085,7 @@ The viewer reads saved results. It does not evaluate anything or change a run.
 | What runs | Where | Protection |
 | --- | --- | --- |
 | The validity function, the evaluator and the objective function | The controller process | None. They are your trusted code. |
-| The researcher and the reviewer | A Harbor job in a container from `--image` | Read-only root filesystem, all capabilities dropped, no new privileges, at most 512 processes. The history, the context and the review inputs are mounted read-only. |
+| The researcher and the reviewer | A Harbor job in a container from `--image`, or for the researcher, from the task's Harbor `environment` | Read-only root filesystem, all capabilities dropped, no new privileges, at most 512 processes. The history, the context and the review inputs are mounted read-only. |
 | The solver of a `HarborTaskEvaluator` | The Harbor task's container | Read-only root filesystem, all capabilities dropped, no new privileges. A Harbor task that declares no network keeps that policy. |
 | A candidate solver program | A separate container | No network, read-only and unprivileged. It has no provider key, grader, controller state or Docker socket. |
 
@@ -843,9 +1104,12 @@ The core tests need neither Harbor nor Docker. They use fake agents, so they are
 fixture evidence: they show that the plumbing works and say nothing about whether
 a researcher improves a task.
 
-`tests/test_native_review.py` and `tests/test_native_researcher.py` run real
-Harbor containers with model responses replaced by local constants, which is
-transport evidence. To run them, build `tests/fixtures/harbor-review/Dockerfile`,
+`tests/test_native_review.py`, `tests/test_native_researcher.py` and
+`tests/test_native_environment.py` run real Harbor containers with model
+responses replaced by local constants, which is transport evidence. The last
+runs a researcher in a Harbor environment with a sidecar, carried memory and
+retained files, extends the run by one more start, builds and records an image,
+and runs a reviewer in its own environment. It pulls a small pinned image. To run them, build `tests/fixtures/harbor-review/Dockerfile`,
 then set `COEVOLUTION_DOCKER_TESTS=1` and `ARI_REVIEW_FIXTURE_IMAGE=sha256:...`.
 
 `npm run test:viewer -- PATH_TO_PACKING_HTML` and
