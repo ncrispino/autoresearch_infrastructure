@@ -12,6 +12,7 @@ from .continuations import (
     capture_continuation,
     load_continuation,
 )
+from .inputs import Environment, Memory, ResearcherInputs, Start, present
 from .instructions import Instructions
 from .research import EvaluationArtifact, Research
 from .review import LLMValidity
@@ -24,21 +25,26 @@ __all__ = [
     "CodingAgent",
     "ContinuationPoint",
     "ContinuationRestoreError",
+    "Environment",
     "Evaluation",
     "EvaluationArtifact",
     "Instructions",
     "EvaluationContext",
     "EnvironmentContinuationAdapter",
     "Limits",
+    "Memory",
     "LLMValidity",
     "Metric",
     "Objective",
     "Research",
+    "ResearcherInputs",
     "Run",
+    "Start",
     "RunSettings",
     "Task",
     "Validity",
     "ValidityContext",
     "capture_continuation",
     "load_continuation",
+    "present",
 ]

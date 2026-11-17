@@ -6,10 +6,10 @@
 | `/context/` | Read-only task material. |
 | `/history/index.json` | Read-only summary of earlier candidates: each idea, its validity verdict, its scores, and which candidate is currently selected. Start here. |
 | `/history/candidates/<id>/` | One earlier candidate: its files in `snapshot/`, its changes in `diff.patch`, its review in `validity/`, and its results in `evaluations/`. |
-| `/tmp/` | Scratch space. Nothing here is submitted. |
+| `/tmp/` | Scratch space. Nothing here is submitted. |$memory_rows
 
 The unchanged baseline is `candidate-0001`. Your starting version is `$parent_id`.
-Read its evidence at `/history/candidates/$parent_id/` before editing.
+$parent_evidence
 The index links each trial's result, and its native trajectory when one exists,
 under `attempts[].paths`. Those paths are relative to `/history`. Use the result
 and native trajectory paths linked in `/history/index.json` to see what happened

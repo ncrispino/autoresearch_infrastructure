@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import shutil
 import tempfile
 from contextlib import ExitStack
 from pathlib import Path
@@ -81,7 +82,7 @@ def _save_native_trajectory(jobs_root, job_name, evidence):
 
 def run_filesystem_agent(
     *, agent, image, instruction, readonly, workspace, evidence, jobs_root,
-    recorder=None, role="validity",
+    recorder=None, role="validity", environment=None,
 ):
     """Run the agent once and return Harbor's trial result.
 
@@ -93,6 +94,10 @@ def run_filesystem_agent(
 
     The container has a read-only root filesystem, no capabilities, and no
     access to the Docker socket or to anything not mounted here.
+
+    ``environment`` is an optional ``HarborEnvironment``: its ``[environment]``
+    settings and files replace the plain ``image`` container. ARI's working
+    directory, skills directory and isolation overlay still apply.
     """
     from harbor.agents.factory import AgentFactory
     from harbor.job import Job
@@ -114,11 +119,15 @@ def run_filesystem_agent(
     evidence, workspace, jobs_root = Path(evidence), Path(workspace), Path(jobs_root)
     evidence.mkdir(parents=True, exist_ok=True)
     task = evidence / "filesystem-task"
-    (task / "environment").mkdir(parents=True)
+    settings = {"docker_image": image, "cpus": 1, "memory_mb": 4096}
+    if environment is not None:
+        settings = {"cpus": 1, "memory_mb": 4096, **environment.config}
+        if environment.files is not None:
+            shutil.copytree(environment.files, task / "environment")
+    (task / "environment").mkdir(parents=True, exist_ok=True)
     (task / "instruction.md").write_text(instruction, encoding="utf-8")
     (task / "task.toml").write_text(FilesystemTask(
-        environment={"docker_image": image, "cpus": 1, "memory_mb": 4096, "workdir": "/workspace",
-                     "skills_dir": "/tmp/harbor-skills"},
+        environment={**settings, "workdir": "/workspace", "skills_dir": "/tmp/harbor-skills"},
     ).model_dump_toml(), encoding="utf-8")
     isolation = task / "environment/isolation.json"
     environment = {"HOME": "/tmp"}

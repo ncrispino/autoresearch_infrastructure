@@ -14,17 +14,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from .api import Validity
+from . import harbor_environment
+from . import memory as memory_views
+from .api import Validity, code_identity
+from .inputs import ResearcherInputs, present
 from .instructions import task_facts
 from .ledger import StartLedger
 from .persistence import digest, write_json
 from .research import BASELINE, Research
-from .search import RESEARCHER_PROTOCOL, propose, researcher_prompt
+from .search import RESEARCHER_PROTOCOL, propose, researcher_starts
 from .source_tree import python_tree_hash, snapshot, task_context_digest
 from .task import Run, RunSettings, Task, load_task
 
@@ -38,6 +42,10 @@ class OpenRun:
     image: str | None
     ledger: StartLedger | None
     instructions: str = ""
+    inputs: ResearcherInputs | None = None
+    environment: harbor_environment.HarborEnvironment | None = None
+    preloaded: Path | None = None
+    presenter_identity: str = "default"
 
     @property
     def context(self) -> Path:
@@ -110,11 +118,12 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
     """
     define, task_file = load_task(task_path)
     settings = RunSettings.load(settings_path) if settings_path else RunSettings.parse({})
-    if settings.researcher or settings.reviewer:
+    missing_image = ValueError("These settings configure agents, so pass their container image with --image")
+    if settings.reviewer is not None and image is None:
+        raise missing_image  # the reviewer always runs in the --image container
+    if image is not None and (settings.researcher or settings.reviewer):
         from .harbor_filesystem import immutable_image
 
-        if image is None:
-            raise ValueError("These settings configure agents, so pass their container image with --image")
         immutable_image(image, "A run with agents")
     output = Path(output).resolve()
     opened_with = _json({
@@ -134,37 +143,70 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
     if not isinstance(task, Task):
         raise ValueError(f"{task_file} task(run) must return an ari.Task")
     task = task.resolved(task_file.parent)
-    ledger = run.starts()
     if settings.reviewer is not None and not task.instructions.rules:
         raise ValueError("Review is on but the instructions list no rules. Add rules, or write reviewer = false")
-    instructions = task.instructions.render(task_facts(
+    environment = harbor_environment.load(task.environment.harbor) if task.environment.harbor else None
+    if settings.researcher is not None and environment is None and image is None:
+        if output.is_dir() and not any(output.iterdir()):
+            output.rmdir()
+        raise missing_image
+    ledger = run.starts()
+    inputs = ResearcherInputs.resolve(task.instructions, task_facts(
         task.objective, sorted(snapshot(Path(task.seed))), cases=len(task.cases), repeats=settings.repeats,
-    ))
-    staged = _stage_context(output, task.context)
+    ), environment=task.environment, memory=task.memory)
+    instructions = inputs.specification()
+    presenter = "default" if task.presenter is None else code_identity(task.presenter)
+    # Everything the researcher may read is copied into the run, sealed by digest
+    # in the plan, and checked again whenever the run is reopened.
+    staged = {"context": _stage_context(output, task.context)}
+    if task.memory.preload is not None:
+        staged["memory/preloaded"] = _stage_tree(output, task.memory.preload)
+    if environment is not None:
+        staged["environment"] = harbor_environment.stage(environment, output / f".stage-{uuid4().hex}").files
+    digests = {}
+    try:
+        digests = {name: task_context_digest(path) for name, path in staged.items()}
+    except ValueError:
+        _discard(staged)
+        raise
     plan = _json({
         **opened_with,
         "instructions": instructions,
         "protocol": RESEARCHER_PROTOCOL.template,
-        "context": task_context_digest(staged),
+        "context": digests["context"],
         "runtime": python_tree_hash(Path(__file__).parent),
+        # The researcher's inputs beyond the instructions above and the context.
+        "inputs": {
+            "memory": task.memory.identity(digests.get("memory/preloaded")),
+            "environment": {
+                "harbor": None if environment is None else digest({
+                    "config": environment.config, "files": digests["environment"]}),
+                "workspace": task.environment.workspace,
+            },
+            "presenter": presenter,
+        },
     })
     if saved is not None and saved != plan:
-        shutil.rmtree(staged)
+        _discard(staged)
         raise changed
-    context = output / "context"
-    if context.exists() or context.is_symlink():
-        try:
-            context_changed = task_context_digest(context) != plan["context"]
-        except ValueError as exc:
-            shutil.rmtree(staged)
-            raise changed from exc
-        if context_changed:
-            shutil.rmtree(staged)
-            raise changed
-        shutil.rmtree(staged)
-    else:
-        staged.rename(context)
+    for name, path in staged.items():
+        final = output / name
+        if final.exists() or final.is_symlink():
+            try:
+                same = task_context_digest(final) == digests[name]
+            except ValueError as exc:
+                _discard(staged)
+                raise changed from exc
+            if not same:
+                _discard(staged)
+                raise changed
+            _remove_tree(path)
+        else:
+            final.parent.mkdir(parents=True, exist_ok=True)
+            path.rename(final)
     write_json(receipt, plan)
+    if environment is not None:
+        environment = harbor_environment.HarborEnvironment(environment.config, output / "environment")
 
     research = Research(
         output / "research",
@@ -177,11 +219,33 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
         tasks=task.cases,
         progress=progress,
     )
-    return OpenRun(task, settings, research, output, image, ledger, instructions)
+    return OpenRun(task, settings, research, output, image, ledger, instructions, inputs, environment,
+                   output / "memory/preloaded" if task.memory.preload is not None else None, presenter)
 
 
 def _json(value):
     return json.loads(json.dumps(value))
+
+
+def _stage_tree(output: Path, source: Path) -> Path:
+    if not Path(source).is_dir() or Path(source).is_symlink():
+        raise ValueError(f"Memory preload must be a directory: {source}")
+    staged = output / f".stage-{uuid4().hex}"
+    shutil.copytree(source, staged, symlinks=True)
+    return staged
+
+
+def _discard(staged: dict) -> None:
+    for path in staged.values():
+        if path.exists():
+            _remove_tree(path)
+
+
+def _remove_tree(path: Path) -> None:
+    for current, dirs, files in os.walk(path):
+        for name in dirs:
+            (Path(current) / name).chmod(0o755)
+    shutil.rmtree(path)
 
 
 def _stage_context(output: Path, files: dict) -> Path:
@@ -252,7 +316,10 @@ def run_researchers(run: OpenRun) -> dict:
         raise ValueError("run needs a [researcher] in the settings; use record to evaluate your own edits")
     from .coding_agent import CodingAgent
 
-    agent = CodingAgent(agent=settings.researcher, image=run.image)
+    agent = (CodingAgent(agent=settings.researcher, image=run.image) if run.environment is None
+             else CodingAgent(agent=settings.researcher, environment=run.environment))
+    inputs = run.inputs
+    present_start = run.task.presenter or present
     repeats = settings.repeats
     panel = len(run.task.cases) * repeats
     proposals, failure = [], None
@@ -265,10 +332,23 @@ def run_researchers(run: OpenRun) -> dict:
             raise RuntimeError("The baseline is not valid and fully measured, so no researcher was started")
         while (stopped := _exhausted(run, panel)) is None:
             parent = research.selected or BASELINE
-            proposals.append({"parent_id": parent, **propose(
-                research, agent, researcher_prompt(run.instructions, parent_id=parent, repeats=repeats),
-                parent_id=parent, repeats=repeats, ledger=ledger, context=run.context,
-            )})
+            start, history, load, manifest = memory_views.prepare(
+                research, inputs.memory, number=len(researcher_starts(research)) + 1, parent_id=parent,
+                repeats=repeats, preloaded=run.preloaded, view=research.root / "agent/view",
+            )
+            try:
+                prompt = present_start(inputs, start)
+                if not isinstance(prompt, str) or not prompt.strip():
+                    raise ValueError("A presenter must return the prompt text")
+                proposals.append({"parent_id": parent, **propose(
+                    research, agent, prompt, parent_id=parent, repeats=repeats, ledger=ledger,
+                    context=run.context, history=history, load_trajectory=load,
+                    reset_workspace=inputs.environment.workspace == "reset",
+                    record={**manifest, "presenter": run.presenter_identity,
+                            "environment": run.environment.identity if run.environment else None},
+                )})
+            finally:
+                memory_views.discard(history)
     except Exception as error:
         failure = f"{type(error).__name__}: {error}"
     summary = run.summary("failed" if failure else "completed", proposals=proposals)
