@@ -47,6 +47,7 @@ class OpenRun:
     preloaded: Path | None = None
     presenter_identity: str = "default"
     review_environment: harbor_environment.HarborEnvironment | None = None
+    replay: list[dict] | None = None
 
     @property
     def context(self) -> Path:
@@ -71,6 +72,13 @@ class OpenRun:
                         if environment is not None}
         if environments:
             summary["environments"] = environments
+        if self.replay is not None:
+            summary["reevaluates"] = {
+                "source": json.loads((self.output / "plan.json").read_text())["reevaluates"]["source"],
+                "candidates": [entry["id"] for entry in self.replay],
+                "pending": [entry["id"] for entry in self.replay if not research.measured(entry["id"])
+                            and research.candidates.get(entry["id"], {}).get("status") != "invalid"],
+            }
         lineage = research.state.get("lineage")
         if lineage:
             summary["extends"] = {
@@ -124,7 +132,8 @@ def _row(research: Research, candidate_id: str) -> dict:
 
 
 def open_run(task_path: Path, settings_path: Path | None, output: Path, image: str | None, *,
-             progress=None, extends: Path | None = None, reviewer_image: str | None = None) -> OpenRun:
+             progress=None, extends: Path | None = None, reviewer_image: str | None = None,
+             reevaluates: Path | None = None) -> OpenRun:
     """Load the task and settings, freeze them in ``plan.json``, and open the experiment.
 
     This starts no agent, builds no image and runs no evaluation. Reopening an
@@ -139,6 +148,11 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
     its candidates, evidence and usage are verified and copied, and the
     settings' limits are cumulative totals. The source is never written.
     Reopening an extension finds its source in ``plan.json``.
+
+    ``reevaluates`` names a finished run whose candidates this new run reviews
+    and evaluates again under its own task, with the same IDs, parents and
+    proposals, before any researcher starts. No evidence is reused and the
+    new run's budget pays for it. The source is never written.
     """
     define, task_file = load_task(task_path)
     settings = RunSettings.load(settings_path) if settings_path else RunSettings.parse({})
@@ -153,13 +167,19 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
     saved = json.loads(receipt.read_text()) if receipt.exists() else None
     if extends is None and saved is not None and saved.get("extends"):
         extends = Path(saved["extends"]["source"])
+    if reevaluates is None and saved is not None and saved.get("reevaluates"):
+        reevaluates = Path(saved["reevaluates"]["source"])
+    if extends is not None and reevaluates is not None:
+        raise ValueError("A run either extends a finished run or re-evaluates its candidates, not both")
     source = None if extends is None else _extension_source(Path(extends), output, saved)
+    replayed = None if reevaluates is None else _extension_source(Path(reevaluates), output, saved)
     opened_with = _json({
         "settings": settings.identity(),
         "image": image,
         "reviewer_image": reviewer_image or image,
         "task_file": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         **({"extends": _lineage(source)} if source else {}),
+        **({"reevaluates": _lineage(replayed, state=True)} if replayed else {}),
     })
     if saved is not None and any(saved.get(key) != value for key, value in opened_with.items()):
         raise ValueError("Run plan changed; use a fresh output")
@@ -167,11 +187,11 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
     created = not output.exists()
     output.mkdir(parents=True, exist_ok=True)
     opening = _Opening(define, task_file, settings, output, image, reviewer_image or image, opened_with,
-                       saved, source, progress)
+                       saved, source, progress, replayed)
     try:
         return opening.open()
     except BaseException:
-        if created and (source is not None or not any(output.iterdir())):
+        if created and (source is not None or replayed is not None or not any(output.iterdir())):
             _remove_tree(output)  # a rejected open leaves no new directory behind
         raise
 
@@ -188,6 +208,7 @@ class _Opening:
     saved: dict | None
     source: Path | None
     progress: object
+    replayed: Path | None = None
 
     def open(self) -> OpenRun:
         settings, output, source = self.settings, self.output, self.source
@@ -213,6 +234,7 @@ class _Opening:
         inputs = _transform(original, task.transforms)
         if settings.reviewer is not None and not inputs.rules:
             raise ValueError("Review is on but the instructions list no rules. Add rules, or write reviewer = false")
+        replay = _replay_plan(self.replayed, Path(task.seed), settings) if self.replayed else None
         ledger = run.starts()
         instructions = inputs.specification()
         presenter = "default" if task.presenter is None else code_identity(task.presenter)
@@ -287,7 +309,7 @@ class _Opening:
         return OpenRun(task, settings, research, output, self.image, ledger, instructions, inputs,
                        prepared["environment"],
                        output / "memory/preloaded" if task.memory.preload is not None else None, presenter,
-                       prepared["review-environment"])
+                       prepared["review-environment"], replay)
 
 
 def _transform(inputs: ResearcherInputs, transforms) -> ResearcherInputs:
@@ -349,20 +371,59 @@ def _evaluation_plan(plan: dict) -> dict:
 def _extension_source(source: Path, output: Path, saved) -> Path:
     source = source.resolve()
     if source == output or output.is_relative_to(source) or source.is_relative_to(output):
-        raise ValueError("An extension needs its own output, outside the source run")
+        raise ValueError("A run made from another run needs its own output, outside the source run")
     if not (source / "plan.json").is_file() or not (source / "research/state.json").is_file():
         raise ValueError(f"No finished run to extend at {source}")
     if saved is None and output.exists() and any(output.iterdir()):
-        raise ValueError("An extension needs a fresh output")
+        raise ValueError("A run made from another run needs a fresh output")
     return source
 
 
-def _lineage(source: Path) -> dict:
-    """The source files an extension is bound to; any later change to them is refused."""
+def _lineage(source: Path, state: bool = False) -> dict:
+    """The source files a run is bound to; any later change to them is refused."""
     def sha(path):
         return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
-    return {"source": str(source), "plan": sha(source / "plan.json"), "starts": sha(source / "starts.json")}
+    lineage = {"source": str(source), "plan": sha(source / "plan.json"), "starts": sha(source / "starts.json")}
+    if state:
+        lineage["state"] = sha(source / "research/state.json")
+    return lineage
+
+
+def _replay_plan(source: Path, seed: Path, settings: RunSettings) -> list[dict]:
+    """Verified candidates of a finished run, in order, for a new run to review and evaluate again."""
+    state = json.loads((source / "research/state.json").read_text())
+    candidates = state["sessions"]["research"]["candidates"]
+    root = source / "research/sessions/research/history/candidates"
+    replay = []
+    for candidate_id, record in candidates.items():
+        files = snapshot(root / candidate_id / "snapshot")
+        if digest(files) != record["source_hash"]:
+            raise ValueError(f"The source's {candidate_id} does not match its saved hash; it was edited")
+        replay.append({"id": candidate_id, "parent_id": record["parent_id"], "proposal": record["proposal"],
+                       "files": files})
+    if not replay or replay[0]["id"] != BASELINE or digest(replay[0]["files"]) != digest(snapshot(seed)):
+        raise ValueError("Re-evaluation needs the source's baseline to be this task's starting files")
+    cells = settings.repeats * len(state["sessions"]["research"]["spec"]["affected_tasks"])
+    if settings.limits.max_candidates < len(replay) or settings.limits.max_evaluations < len(replay) * cells:
+        raise ValueError(f"Re-evaluating {len(replay)} candidates needs at least {len(replay)} candidates and "
+                         f"{len(replay) * cells} evaluations in the limits")
+    return replay
+
+
+def _replay(run: OpenRun) -> None:
+    """Record the source's candidates again, in order, so each is reviewed and evaluated under this task."""
+    research, repeats = run.research, run.settings.repeats
+    for entry in run.replay or ():
+        if entry["id"] in research.candidates:
+            if not research.measured(entry["id"]) and research.candidates[entry["id"]]["status"] != "invalid":
+                research.record_candidate(entry["id"], total_repeats=repeats)
+            continue
+        research.reset_workspace(entry["files"])
+        proposal = {**(entry["proposal"] or {}), "reevaluated_from": entry["id"]}
+        result = research.record_candidate(total_repeats=repeats, parent_id=entry["parent_id"], proposal=proposal)
+        if result["candidate_id"] != entry["id"]:
+            raise RuntimeError(f"Re-evaluated {entry['id']} was saved as {result['candidate_id']}")
 
 
 def _json(value):
@@ -460,6 +521,7 @@ def record_workspace(run: OpenRun) -> dict:
     """
     repeats = run.settings.repeats
     _prepare(run)
+    _replay(run)
     # The workspace was last saved as the newest candidate, so that is this one's parent.
     parent = next(reversed(run.research.candidates), None)
     result = run.research.record_candidate(total_repeats=repeats, parent_id=parent)
@@ -487,6 +549,7 @@ def run_researchers(run: OpenRun) -> dict:
     proposals, failure = [], None
     try:
         _prepare(run)
+        _replay(run)
         if research.candidates:
             research.record_candidate(BASELINE, total_repeats=repeats)
         else:

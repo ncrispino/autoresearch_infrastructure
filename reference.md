@@ -116,16 +116,20 @@ with agents, and [local.toml](examples/curve-fitting/local.toml) is one without.
 | `ari record TASK --output DIR` | Saves the workspace as a candidate, then reviews and evaluates it. Use it for your own edits. |
 | `ari run TASK --output DIR` | Evaluates the baseline, then starts researchers until a budget runs out. This calls your models. |
 | `ari extend TASK --from SRC --output DIR` | Continues the finished run `SRC` in a new directory with the larger limits of `--config`. Starts nothing; run `ari run` on `DIR` next. See [Extend a finished run](#extend-a-finished-run). |
+| `ari import TASK --from SRC --output DIR` | Starts a new run that reviews and evaluates the candidates of `SRC` again under this task. Starts nothing; `ari run` on `DIR` does the work. |
+| `ari prepare TASK --output DIR` | Builds or resolves the task's Harbor environments and records their images. Starts no agent. `run` and `record` do this first themselves. |
 | `ari view DIR --html FILE` | Writes the results as one HTML page. `FILE` must not exist yet. |
 | `ari inspect DIR` | Prints the results as JSON. |
 
 `TASK` is a directory containing `task.py`, or the file itself. `DIR` is the run
-directory. The first four commands also take:
+directory. The commands that open a task also take:
 
 - `--config FILE`: the run settings. The default is `run.toml` beside the task.
 - `--image ID`: the container image for the researcher and reviewer, required
-  when the settings have either. A researcher with a Harbor `environment` does
-  not use it; a reviewer always does. It must be an image ID (`sha256:...`) or a digest
+  when the settings have either. A researcher with a Harbor `environment`, or a
+  reviewer with a `review_environment`, does not use it.
+- `--reviewer-image ID`: a separate image for the reviewer. Without it the
+  reviewer uses `--image`, as before. It must be an image ID (`sha256:...`) or a digest
   (`repository@sha256:...`), so a moved tag cannot change a run.
 - `--json`: print one JSON summary and turn off the progress display.
 
@@ -157,7 +161,7 @@ Three ways to reuse a run differ in what they keep:
 | --- | --- | --- |
 | To finish the budget a run already has | `ari run` on the same directory | Same-plan resume. Any change to the plan is refused. |
 | More candidates or evaluations than a finished run allowed | `ari extend` into a new directory | The source is copied and verified. Its candidates keep their IDs, parents, reviews, measurements and selection, and their evidence is reused without new calls. |
-| To judge saved candidates under a changed evaluator or rules | Not supported | Start a fresh run. An extension never re-evaluates. |
+| To judge saved candidates under a changed evaluator or rules | `ari import` into a new directory | The source's candidates are recorded again with the same IDs, parents and proposals, then reviewed and evaluated under the new task before any researcher starts. No evidence is reused, and the new run's limits pay for it. |
 
 ```sh
 ari extend examples/curve-fitting --from runs/curve --output runs/curve-more \
@@ -183,6 +187,13 @@ only read. Its `plan.json` and `starts.json` are bound into the new plan, so
 reopening the extension after the source changed is refused. The viewer shows
 the source and marks imported candidates.
 
+`ari import` needs the source's baseline to equal the task's starting files and
+limits large enough for every source candidate. Each snapshot is checked against
+its saved hash first. Re-recorded candidates keep the source's proposal, with
+`reevaluated_from` added. Reopening the new directory finds its source in
+`plan.json`, refuses a changed source, and continues any re-evaluation that was
+interrupted.
+
 ## Run directory
 
 ```text
@@ -192,6 +203,8 @@ DIR/
   context/           the researcher's read-only files
   memory/preloaded/  preloaded records, when the memory has them
   environment/       the researcher's Harbor environment, when the task has one
+  review-environment/  the reviewer's Harbor environment, when the task has one
+  prepared/          the image identities each environment was prepared with
   research/          the ari.Research output
     state.json
     sessions/research/
@@ -205,6 +218,7 @@ DIR/
         evaluations/         results and artifacts
       agent/invocations/     researcher logs and trajectories
       agent/inputs/          each start's exact prompt and input manifest
+      agent/retained/        files exported after each start, when they are kept
       agent/researcher-starts.json   every researcher start, oldest first
   summary.json       the outcome of the last run or record
   viewer.html        the same results as a page
@@ -908,6 +922,8 @@ ari.Task(..., memory=ari.Memory(history=3, conversations=2))
 | `preload` | A directory | Earlier experiment records, such as another run's `history/`, shown under `/history/preloaded/`. They are copied into the run and sealed in the plan. They never become candidates, results or spent budget. |
 | `conversations` | `0` (default), `k`, or `"all"` | Earlier researcher conversations of this run that each start receives: those of the last `k` starts that saved one, in time order. Failed starts and starts whose candidate was not selected count. |
 | `conversation_mode` | `"files"` (default) or `"native"` | `"files"` mounts the conversations as ATIF JSON under `/history/conversations/`. `"native"` loads the previous start's conversation into the agent through Harbor's `load_trajectory`, so the start continues it. It needs `conversations=1` and an agent that loads ATIF trajectories, such as Claude Code or Codex. |
+| `log` | `False` (default) or `True` | Adds `/history/log.md`, a research log ARI writes from its own records before each start: every visible candidate's parent, hypothesis, mechanism, verdict and score. |
+| `summarize` | A function `(index) -> str` | Shown as `/history/summary.md`. It receives the visible `/history/index.json` content. It is trusted code: its identity goes into the plan and its output's hash into each start's record. |
 
 With the default memory, a start mounts the canonical history. Any other policy
 builds a separate view for that start, so a hidden record is not reachable
@@ -921,6 +937,17 @@ controller's selection, evidence and budgets are unchanged.
 ari.Task(..., environment=ari.Environment(harbor="researcher-env", workspace="reset"))
 ```
 
+A start's container, its services and their volumes are deleted when the start
+ends. `workspace` says what survives besides the candidate and the memory:
+
+| `workspace` | Before a start | After a start |
+| --- | --- | --- |
+| `"keep"` (default) | The workspace is cleared, then the previous start's export is restored after its seal is checked | Files left under `/workspace/` outside `candidate/` are copied to `agent/retained/<invocation>/` and sealed. Links and special files are dropped and listed |
+| `"reset"` | The workspace is cleared | Nothing is kept |
+
+A changed export is refused before the next start. An export larger than the
+context limits is not kept, and its record says why.
+
 `harbor` names a Harbor task directory. ARI uses only its `task.toml`
 `[environment]` table and its `environment/` directory: a Dockerfile, an
 optional `docker-compose.yaml` for services, or a prebuilt `docker_image`.
@@ -931,17 +958,31 @@ ARI adds only what the experiment needs: the working directory, the skills
 directory, its isolation overlay and the mounts for the candidate, context,
 history and submission. A definition may not set `workdir` or `skills_dir`.
 Every image, in `docker_image`, Dockerfile `FROM` lines and compose services,
-must be pinned by digest. The definition is copied into the run and its hash
-recorded. Steps that download during a build are not frozen, and the built
-image's ID is not recorded. The researcher runs on the local Docker backend:
-submission uses a host socket and bind mounts, which remote Harbor providers do
-not offer.
+must be pinned by digest. Compose may not change the main service's user,
+mounts, capabilities or network, and services may not be privileged, bind host
+paths, use the host network or be built. The definition is copied into the run
+and its hash recorded.
 
-The reviewer keeps the `--image` container, so changing the researcher's
-environment never changes the reviewer's.
+An environment goes through three stages:
 
-`workspace="reset"` removes files a researcher left under `/workspace/` outside
-`candidate/` before every start. The default, `"keep"`, leaves them.
+1. `ari check` validates the definition and starts nothing.
+2. `ari prepare`, or the first step of `run` and `record`, builds the
+   Dockerfile once with `docker build`, or resolves the pinned `docker_image`,
+   and writes `prepared/<environment>.json` with the actual image ID of the main
+   container and every sidecar's image. Every start's record repeats them. If
+   the prepared image is later missing, ARI refuses rather than rebuild a
+   possibly different image.
+3. Each start uses Harbor's own lifecycle on the prepared image: start the
+   services, wait for health checks, set up the agent, run it, then delete
+   everything with its volumes.
+
+Agents run on Harbor's local Docker backend. Submission uses a host socket and
+bind mounts, which remote Harbor providers do not offer, so a definition that
+needs another provider, such as a TPU, is refused.
+
+The reviewer runs in `--reviewer-image`, in `--image`, or in its own
+`review_environment`, a Harbor task directory prepared the same way. Changing
+the researcher's environment never changes the reviewer's.
 
 ### Presentation and the record of each start
 
@@ -952,7 +993,23 @@ writes the standard layout; with the default memory its text is unchanged.
 
 A custom presenter can reword, reorder, omit or add to what the researcher is
 told. That is an experimental change, so the presenter's code identity goes into
-the plan. Every start saves, under `agent/inputs/<invocation>/`:
+the plan.
+
+To change the content instead, pass `Task(transforms=[...])`. Each transform
+maps `ResearcherInputs` to `ResearcherInputs`, in order, before anything is
+shown:
+
+```python
+ari.Task(..., transforms=[ari.transforms.omit_rule(2), ari.transforms.omit_measured()])
+```
+
+`ari.transforms` has `omit_rule`, `reword_rule`, `add_rule`, `replace_goal`,
+`add_environment_note` and `omit_measured`. Rules are numbered from 1. A
+transform may not change the memory or the environment. The monitor is part of
+the run, so the reviewer judges the changed rules and reads the changed text.
+The plan records each transform with its arguments, and the original task text
+as `inputs.original_instructions`, for relabeling afterwards. Scoring never
+changes. Every start saves, under `agent/inputs/<invocation>/`:
 
 - `prompt.md`: the exact prompt.
 - `inputs.json`: the parent and its hash, the prompt's hash, the memory policy,
@@ -965,18 +1022,19 @@ the plan. Every start saves, under `agent/inputs/<invocation>/`:
 | --- | --- | --- |
 | Written goal, rules, environment notes | Now: `instructions` | The fixed layout and generated "What is measured" facts |
 | Wording and order of the prompt | Now: `presenter` | Recorded per start, kept away from the reviewer |
+| Changing the content the researcher is told | Now: `transforms`, `ari.transforms` | Recorded with the original text |
 | Starting files, context | Now: `seed`, `context` | Candidates, baseline and sealed copies |
 | Container, services, resources, network | Now: `environment.harbor` | Harbor's own definition; ARI adds isolation, mounts and submission |
-| Files surviving between starts | Now: `environment.workspace` | Reset or keep around the controller-managed candidate |
+| Files surviving between starts | Now: `environment.workspace` | Sealed export and restore around the controller-managed candidate |
+| Building and recording images | Now: `ari prepare` | Actual main and sidecar image identities, reused by every start |
 | Which earlier candidates are visible | Now: `memory.history` | Separate per-start views over trusted evidence |
 | Preloaded records | Now: `memory.preload` | Sealed copies that never count as evidence |
 | Earlier researcher conversations | Now: `memory.conversations` | Selection over the run's starts; native loading is Harbor's `load_trajectory` |
+| Research log and summaries | Now: `memory.log`, `memory.summarize` | Written from trusted records; summaries recorded |
+| Reviewer environment | Now: `--reviewer-image`, `review_environment` | Independent of the researcher's |
 | Continuing a finished run | Now: `ari extend` | Verified import, cumulative budgets, lineage |
-| Separate reviewer environments | Proposed | The reviewer uses `--image` |
-| Summaries or research logs kept between starts | Proposed | Add when a study needs one |
-| Generated perturbations of the inputs | Proposed | Use a presenter, or write the changed instructions directly |
-| Remote Harbor providers for the researcher | Proposed | Needs a submission path without a host socket |
-| Recording built image IDs | Proposed | The definition's hash is recorded |
+| Re-evaluating a finished run's candidates | Now: `ari import` | Same IDs, parents and proposals under a new contract |
+| Remote Harbor providers | Not supported | Needs a submission path without a host socket; refused explicitly |
 
 ## Viewer
 
@@ -1023,9 +1081,12 @@ The core tests need neither Harbor nor Docker. They use fake agents, so they are
 fixture evidence: they show that the plumbing works and say nothing about whether
 a researcher improves a task.
 
-`tests/test_native_review.py` and `tests/test_native_researcher.py` run real
-Harbor containers with model responses replaced by local constants, which is
-transport evidence. To run them, build `tests/fixtures/harbor-review/Dockerfile`,
+`tests/test_native_review.py`, `tests/test_native_researcher.py` and
+`tests/test_native_environment.py` run real Harbor containers with model
+responses replaced by local constants, which is transport evidence. The last
+runs a researcher in a Harbor environment with a sidecar, carried memory and
+retained files, extends the run by one more start, builds and records an image,
+and runs a reviewer in its own environment. It pulls a small pinned image. To run them, build `tests/fixtures/harbor-review/Dockerfile`,
 then set `COEVOLUTION_DOCKER_TESTS=1` and `ARI_REVIEW_FIXTURE_IMAGE=sha256:...`.
 
 `npm run test:viewer -- PATH_TO_PACKING_HTML` and

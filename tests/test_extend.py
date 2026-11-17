@@ -207,3 +207,60 @@ def test_a_source_with_an_interrupted_evaluation_is_refused(finished):
     with pytest.raises(ValueError, match="interrupted evaluation"):
         launch.open_run(directory, settings(directory, 6, 5, "more.toml"), root / "child", IMAGE, extends=source)
     assert not (root / "child").exists()
+
+
+def test_import_reevaluates_candidates_under_a_changed_evaluator(finished, monkeypatch):
+    directory, source, root = finished
+    before, evaluated = tree_hash(source), len(evaluations(directory))
+    task_file = directory / "task.py"
+    task_file.write_text(task_file.read_text().replace("abs(10 - value)", "abs(6 - value)"))
+    seen = fixture_agent(monkeypatch, [6])
+    more = settings(directory, 5, 4, "import.toml")
+    opened = launch.open_run(directory, more, root / "child", IMAGE, reevaluates=source)
+    with opened.research:
+        checked = launch.check_run(opened)
+        assert checked["reevaluates"]["pending"] == ["candidate-0001", "candidate-0002", "candidate-0003"]
+        assert len(evaluations(directory)) == evaluated and seen == []
+        summary = launch.run_researchers(opened)
+    assert tree_hash(source) == before
+    # Every source candidate is evaluated again under the new evaluator, then researchers continue.
+    assert evaluations(directory)[evaluated:] == ["0", "4", "7", "6"]
+    rows = {row["candidate_id"]: row for row in summary["candidates"]}
+    assert rows["candidate-0002"]["metrics"] == {"error": 2} and rows["candidate-0003"]["parent_id"] == "candidate-0002"
+    research = opened.research
+    assert research.candidates["candidate-0003"]["proposal"]["reevaluated_from"] == "candidate-0003"
+    assert summary["selected"] == "candidate-0004" and summary["reevaluates"]["pending"] == []
+    assert summary["stopped"] == "too few evaluations left for another candidate" and len(seen) == 1
+    # Reopening finds the source again and does not re-record anything.
+    reopened = launch.open_run(directory, more, root / "child", IMAGE)
+    with reopened.research:
+        assert len(reopened.research.candidates) == 4
+
+
+@pytest.mark.parametrize("problem, message", [
+    ("snapshot", "does not match its saved hash"),
+    ("seed", "baseline to be this task's starting files"),
+    ("limits", "needs at least 3 candidates"),
+])
+def test_import_refuses_edited_sources_other_seeds_and_small_limits(finished, problem, message):
+    directory, source, root = finished
+    config = settings(directory, 5, 5, "import.toml")
+    if problem == "snapshot":
+        path = source / "research/sessions/research/history/candidates/candidate-0002/snapshot/value.json"
+        writable(path)
+        path.write_text("5")
+    elif problem == "seed":
+        (directory / "seed/value.json").write_text("1")
+    else:
+        config = settings(directory, 2, 5, "small.toml")
+    with pytest.raises(ValueError, match=message):
+        launch.open_run(directory, config, root / "child", IMAGE, reevaluates=source)
+    assert not (root / "child").exists()
+
+
+def test_the_import_command_starts_nothing(finished, capsys):
+    directory, source, root = finished
+    code = cli.main(["import", str(directory), "--from", str(source), "--output", str(root / "child"),
+                     "--config", str(settings(directory, 5, 5, "import.toml")), "--image", IMAGE, "--json"])
+    summary = json.loads(capsys.readouterr().out)
+    assert code == 0 and summary["candidates"] == [] and len(summary["reevaluates"]["pending"]) == 3

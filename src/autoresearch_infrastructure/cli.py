@@ -15,6 +15,7 @@ def main(argv=None):
         "run": "Measure the baseline, then start researchers until a budget runs out. May incur charges.",
         "extend": "Continue a finished run in a new output with larger limits. Starts nothing.",
         "prepare": "Build or resolve the task's Harbor environments and record their images. Starts no agent.",
+        "import": "Start a new run that reviews and evaluates a finished run's candidates again. Starts nothing.",
     }
     for name, summary in actions.items():
         command = commands.add_parser(name, help=summary, description=summary)
@@ -24,9 +25,9 @@ def main(argv=None):
         command.add_argument("--image", help="Immutable image ID for the researcher and reviewer")
         command.add_argument("--reviewer-image", help="Immutable image ID for the reviewer only")
         command.add_argument("--json", action="store_true", help="Print one JSON summary and no progress display")
-        if name == "extend":
+        if name in ("extend", "import"):
             command.add_argument("--from", dest="source", type=Path, required=True,
-                                 help="The finished run directory to continue; it is not modified")
+                                 help="The finished run directory to read; it is not modified")
     for name, summary in {
         "view": "Export the results of a run as one HTML page.",
         "inspect": "Print the results of a run as JSON.",
@@ -58,11 +59,13 @@ def _task_command(args) -> int:
     directory = args.task if args.task.is_dir() else args.task.parent
     config = args.config or (directory / "run.toml" if (directory / "run.toml").is_file() else None)
     action = {"check": launch.check_run, "record": launch.record_workspace, "run": launch.run_researchers,
-              "extend": launch.check_run, "prepare": launch.prepare_run}[args.command]
+              "extend": launch.check_run, "import": launch.check_run, "prepare": launch.prepare_run}[args.command]
     try:
         with TerminalProgress(enabled=not args.json) as progress:
             run = launch.open_run(args.task, config, args.output, args.image, progress=progress,
-                                  extends=getattr(args, "source", None), reviewer_image=args.reviewer_image)
+                                  extends=getattr(args, "source", None) if args.command == "extend" else None,
+                                  reevaluates=getattr(args, "source", None) if args.command == "import" else None,
+                                  reviewer_image=args.reviewer_image)
             with run.research:
                 summary = action(run)
     except (ValueError, RuntimeError, OSError) as error:
