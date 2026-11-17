@@ -179,10 +179,12 @@ class Research(EvaluationLifecycle):
         ):
             raise ValueError("Experiment setup changed; use a fresh output")
         lineage = self.state.get("lineage")
-        if (extends is None) != (lineage is None) or (
-            lineage is not None and lineage["receipt"] != _import_receipt(Path(extends).resolve())
-        ):
-            raise ValueError("The extended source run changed, or this output extends a different run")
+        if lineage is not None and extends is None:
+            raise ValueError(f"This output extends {lineage['source']}; pass extends= that output to reopen it")
+        if lineage is None and extends is not None:
+            raise ValueError("This output is not an extension; open it without extends=")
+        if lineage is not None and lineage["receipt"] != _import_receipt(Path(extends).resolve()):
+            raise ValueError("The extended source changed after the extension was made; use a fresh output")
         if digest(snapshot(self.root / "seed")) != seed_hash:
             raise ValueError("Saved starting files changed")
         self._recover_interrupted_trial_starts()

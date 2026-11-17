@@ -93,7 +93,9 @@ container holding a copy of the best candidate so far. The researcher edits the
 copy and submits it through one tool, `record_candidate`. ARI saves the
 submission, has it reviewed, evaluates it, and returns the result to the
 researcher. This repeats until a limit in the settings is reached. Running the
-command again continues with whatever budget is left.
+command again continues with whatever budget is left. To go past a finished
+run's limits, `ari extend` continues it in a new directory without re-running
+anything; see [Extend a finished run](reference.md#extend-a-finished-run).
 
 The limits count candidates and evaluations. Agent starts follow from them: one
 review for each candidate and one researcher for each candidate after the
@@ -200,7 +202,10 @@ only through the parent candidate's files in `/workspace/candidate/`, through
 `/history/` starts with the baseline. After each proposal, ARI adds the
 candidate with its proposal notes (hypothesis and mechanism), diff, review,
 scores and evaluation trajectories. Earlier researchers' own conversations are
-not included.
+not included. A task can change all of this with `ari.Memory` (fewer candidates,
+preloaded records, carried conversations) and `ari.Environment` (a Harbor
+environment definition, or a workspace reset between starts); see
+[Researcher inputs](reference.md#researcher-inputs).
 
 **Changing what the researcher is told.** The reviewer judges against the rules
 and text the researcher was given, so a run with reworded or omitted rules is
