@@ -54,12 +54,22 @@ class Memory:
         conversation into the agent through Harbor's ``load_trajectory``, so the
         start continues it; it needs ``conversations=1`` and an agent with ATIF
         loading support.
+    ``log``
+        ``True`` adds ``/history/log.md``, a research log ARI writes from its
+        own records before each start: every visible candidate's parent,
+        hypothesis, mechanism, verdict and score, oldest first.
+    ``summarize``
+        A function ``(index) -> str`` given the visible ``/history/index.json``
+        content. Its text is shown as ``/history/summary.md``. It is trusted
+        code, recorded by its identity, and its output is saved with each start.
     """
 
     history: str | int = "all"
     preload: Path | str | None = None
     conversations: int | str = 0
     conversation_mode: str = "files"
+    log: bool = False
+    summarize: Callable | None = None
 
     def __post_init__(self):
         if self.history not in _HISTORY and not (type(self.history) is int and self.history > 0):
@@ -70,6 +80,10 @@ class Memory:
             raise ValueError('Memory conversation_mode is "files" or "native"')
         if self.conversation_mode == "native" and self.conversations != 1:
             raise ValueError("Native conversation loading carries exactly the previous start: use conversations=1")
+        if type(self.log) is not bool:
+            raise ValueError("Memory log is True or False")
+        if self.summarize is not None and not callable(self.summarize):
+            raise ValueError("Memory summarize is a function of the history index")
         if self.preload is not None and not isinstance(self.preload, (str, Path)):
             raise ValueError("Memory preload is a directory path")
         if isinstance(self.preload, str):
@@ -78,14 +92,17 @@ class Memory:
     @property
     def is_default(self) -> bool:
         """Whether a start sees exactly the canonical history, with nothing added."""
-        return self.history == "all" and self.preload is None and self.conversations == 0
+        return (self.history == "all" and self.preload is None and self.conversations == 0
+                and not self.log and self.summarize is None)
 
-    def identity(self, preload_digest: str | None = None) -> dict:
+    def identity(self, preload_digest: str | None = None, summarize: str | None = None) -> dict:
         return {
             "history": self.history,
             "preload": preload_digest,
             "conversations": self.conversations,
             "conversation_mode": self.conversation_mode,
+            "log": self.log,
+            "summarize": summarize,
         }
 
 
@@ -101,10 +118,13 @@ class Environment:
         solution are ignored. Without it, the researcher runs in the ``--image``
         container.
     ``workspace``
-        ``"keep"`` (the default) leaves files a researcher wrote under
-        ``/workspace/`` outside ``candidate/`` for later starts. ``"reset"``
-        removes them before every start, so only the parent candidate and the
-        memory carry over.
+        What survives a start besides the candidate and the memory. Containers,
+        services and their volumes never do: each start's environment is torn
+        down when it ends. With ``"keep"`` (the default), ARI exports the files
+        a researcher left under ``/workspace/`` outside ``candidate/`` after
+        each start, seals them, and restores exactly that export before the
+        next start. With ``"reset"``, nothing is exported and every start
+        begins with only the parent candidate.
     """
 
     harbor: Path | str | None = None
@@ -176,6 +196,8 @@ class Start:
     preloaded: bool = False
     conversations: tuple[str, ...] = ()
     conversation_mode: str = "files"
+    log: bool = False
+    summary: bool = False
 
 
 Presenter = Callable[[ResearcherInputs, Start], str]

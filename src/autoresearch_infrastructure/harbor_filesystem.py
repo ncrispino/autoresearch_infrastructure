@@ -11,7 +11,6 @@ import json
 import math
 import os
 import re
-import shutil
 import tempfile
 from contextlib import ExitStack
 from pathlib import Path
@@ -96,8 +95,10 @@ def run_filesystem_agent(
     access to the Docker socket or to anything not mounted here.
 
     ``environment`` is an optional ``HarborEnvironment``: its ``[environment]``
-    settings and files replace the plain ``image`` container. ARI's working
-    directory, skills directory and isolation overlay still apply.
+    settings, prepared image and services replace the plain ``image``
+    container. ARI's working directory, skills directory and isolation overlay
+    still apply. Every job runs on local Docker and is deleted with its volumes
+    when it ends, so only the mounted workspace outlives a start.
     """
     from harbor.agents.factory import AgentFactory
     from harbor.job import Job
@@ -119,12 +120,13 @@ def run_filesystem_agent(
     evidence, workspace, jobs_root = Path(evidence), Path(workspace), Path(jobs_root)
     evidence.mkdir(parents=True, exist_ok=True)
     task = evidence / "filesystem-task"
-    settings = {"docker_image": image, "cpus": 1, "memory_mb": 4096}
     if environment is not None:
-        settings = {"cpus": 1, "memory_mb": 4096, **environment.config}
-        if environment.files is not None:
-            shutil.copytree(environment.files, task / "environment")
-    (task / "environment").mkdir(parents=True, exist_ok=True)
+        from .harbor_environment import runtime
+
+        settings = runtime(environment, task / "environment")  # the prepared image, never a rebuild
+    else:
+        settings = {"docker_image": image, "cpus": 1, "memory_mb": 4096}
+        (task / "environment").mkdir(parents=True)
     (task / "instruction.md").write_text(instruction, encoding="utf-8")
     (task / "task.toml").write_text(FilesystemTask(
         environment={**settings, "workdir": "/workspace", "skills_dir": "/tmp/harbor-skills"},
@@ -165,7 +167,8 @@ def run_filesystem_agent(
         config = JobConfig(
             job_name=role + "-" + uuid4().hex, jobs_dir=jobs_root,
             agents=[agent], tasks=[TaskConfig(path=task)],
-            environment=EnvironmentConfig(mounts=mounts, extra_docker_compose=[isolation]),
+            environment=EnvironmentConfig(type="docker", delete=True, mounts=mounts,
+                                          extra_docker_compose=[isolation]),
             verifier=VerifierConfig(disable=True), n_attempts=1, n_concurrent_trials=1,
             retry=RetryConfig(max_retries=0), quiet=True,
         )

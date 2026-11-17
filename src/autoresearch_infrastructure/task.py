@@ -74,6 +74,15 @@ class Task:
         ``(ResearcherInputs, Start) -> str``: the prompt one start reads. The
         default is ``ari.present``, the standard layout. The reviewer always
         reads the standard task text, whatever the presenter shows.
+    ``transforms``
+        Functions ``ResearcherInputs -> ResearcherInputs`` applied in order,
+        such as ``ari.transforms.omit_rule(2)``: a recorded change to what the
+        researcher is told. The reviewer judges the changed rules, as the
+        monitor reads the same inputs as the run; the plan keeps the original
+        text for relabeling afterwards.
+    ``review_environment``
+        A Harbor task directory whose environment the reviewer runs in, instead
+        of the ``--image`` (or ``--reviewer-image``) container.
     """
 
     objective: Metric | Objective
@@ -86,6 +95,8 @@ class Task:
     environment: Environment = field(default_factory=Environment)
     memory: Memory = field(default_factory=Memory)
     presenter: Callable | None = None
+    transforms: tuple[Callable, ...] = ()
+    review_environment: Path | str | None = None
 
     def __post_init__(self):
         if isinstance(self.instructions, str):
@@ -96,6 +107,9 @@ class Task:
             raise ValueError("environment is an ari.Environment and memory an ari.Memory")
         if self.presenter is not None and not callable(self.presenter):
             raise ValueError("presenter is a function of (inputs, start) returning the prompt")
+        object.__setattr__(self, "transforms", tuple(self.transforms))
+        if any(not callable(transform) for transform in self.transforms):
+            raise ValueError("transforms are functions of ResearcherInputs returning ResearcherInputs")
 
     def resolved(self, directory: Path) -> Task:
         """A copy with every relative path resolved against ``directory`` and its instructions read."""
@@ -112,8 +126,9 @@ class Task:
             environment = replace(environment, harbor=directory / environment.harbor)
         if memory.preload is not None:
             memory = replace(memory, preload=directory / memory.preload)
+        review = None if self.review_environment is None else directory / self.review_environment
         return replace(self, seed=directory / self.seed, instructions=instructions, context=context,
-                       environment=environment, memory=memory)
+                       environment=environment, memory=memory, review_environment=review)
 
 
 @dataclass(frozen=True)

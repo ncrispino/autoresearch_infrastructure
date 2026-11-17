@@ -46,6 +46,7 @@ class OpenRun:
     environment: harbor_environment.HarborEnvironment | None = None
     preloaded: Path | None = None
     presenter_identity: str = "default"
+    review_environment: harbor_environment.HarborEnvironment | None = None
 
     @property
     def context(self) -> Path:
@@ -64,6 +65,12 @@ class OpenRun:
             "budget": research.budget_summary(),
             **extra,
         }
+        environments = {role: environment.prepared() or "not prepared"
+                        for role, environment in (("researcher", self.environment),
+                                                  ("reviewer", self.review_environment))
+                        if environment is not None}
+        if environments:
+            summary["environments"] = environments
         lineage = research.state.get("lineage")
         if lineage:
             summary["extends"] = {
@@ -117,11 +124,16 @@ def _row(research: Research, candidate_id: str) -> dict:
 
 
 def open_run(task_path: Path, settings_path: Path | None, output: Path, image: str | None, *,
-             progress=None, extends: Path | None = None) -> OpenRun:
+             progress=None, extends: Path | None = None, reviewer_image: str | None = None) -> OpenRun:
     """Load the task and settings, freeze them in ``plan.json``, and open the experiment.
 
-    This starts no agent and no evaluation. Reopening an output with a different
-    task, settings or image is refused, so a run's budget cannot be reset.
+    This starts no agent, builds no image and runs no evaluation. Reopening an
+    output with a different task, settings or image is refused, so a run's
+    budget cannot be reset.
+
+    ``image`` is the container of the researcher and the reviewer.
+    ``reviewer_image`` gives the reviewer its own; a task's Harbor
+    ``environment`` or ``review_environment`` replaces either.
 
     ``extends`` names a finished run directory to continue in this new output:
     its candidates, evidence and usage are verified and copied, and the
@@ -130,13 +142,12 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
     """
     define, task_file = load_task(task_path)
     settings = RunSettings.load(settings_path) if settings_path else RunSettings.parse({})
-    missing_image = ValueError("These settings configure agents, so pass their container image with --image")
-    if settings.reviewer is not None and image is None:
-        raise missing_image  # the reviewer always runs in the --image container
-    if image is not None and (settings.researcher or settings.reviewer):
+    if settings.researcher or settings.reviewer:
         from .harbor_filesystem import immutable_image
 
-        immutable_image(image, "A run with agents")
+        for value in (image, reviewer_image):
+            if value is not None:
+                immutable_image(value, "A run with agents")
     output = Path(output).resolve()
     receipt = output / "plan.json"
     saved = json.loads(receipt.read_text()) if receipt.exists() else None
@@ -146,85 +157,158 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
     opened_with = _json({
         "settings": settings.identity(),
         "image": image,
+        "reviewer_image": reviewer_image or image,
         "task_file": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         **({"extends": _lineage(source)} if source else {}),
     })
-    changed = ValueError("Run plan changed; use a fresh output")
     if saved is not None and any(saved.get(key) != value for key, value in opened_with.items()):
-        raise changed
+        raise ValueError("Run plan changed; use a fresh output")
 
     created = not output.exists()
     output.mkdir(parents=True, exist_ok=True)
+    opening = _Opening(define, task_file, settings, output, image, reviewer_image or image, opened_with,
+                       saved, source, progress)
     try:
-        return _open(define, task_file, settings, output, image, opened_with, saved, receipt, changed,
-                     missing_image, progress, source)
+        return opening.open()
     except BaseException:
-        if created and source is not None:
-            _remove_tree(output)  # a rejected extension leaves no child behind
+        if created and (source is not None or not any(output.iterdir())):
+            _remove_tree(output)  # a rejected open leaves no new directory behind
         raise
 
 
-def _open(define, task_file, settings, output, image, opened_with, saved, receipt, changed, missing_image,
-          progress, source):
-    run = Run(settings, output, image, directory=task_file.parent, identity=opened_with,
-              continues=source / "starts.json" if source else None)
-    task = define(run)
-    if not isinstance(task, Task):
-        raise ValueError(f"{task_file} task(run) must return an ari.Task")
-    task = task.resolved(task_file.parent)
-    if settings.reviewer is not None and not task.instructions.rules:
-        raise ValueError("Review is on but the instructions list no rules. Add rules, or write reviewer = false")
-    environment = harbor_environment.load(task.environment.harbor) if task.environment.harbor else None
-    if settings.researcher is not None and environment is None and image is None:
-        if output.is_dir() and not any(output.iterdir()):
-            output.rmdir()
-        raise missing_image
-    ledger = run.starts()
-    inputs = ResearcherInputs.resolve(task.instructions, task_facts(
-        task.objective, sorted(snapshot(Path(task.seed))), cases=len(task.cases), repeats=settings.repeats,
-    ), environment=task.environment, memory=task.memory)
-    instructions = inputs.specification()
-    presenter = "default" if task.presenter is None else code_identity(task.presenter)
-    # Everything the researcher may read is copied into the run, sealed by digest
-    # in the plan, and checked again whenever the run is reopened.
-    staged = {"context": _stage_context(output, task.context)}
-    if task.memory.preload is not None:
-        staged["memory/preloaded"] = _stage_tree(output, task.memory.preload)
-    if environment is not None:
-        staged["environment"] = harbor_environment.stage(environment, output / f".stage-{uuid4().hex}").files
-    digests = {}
-    try:
-        digests = {name: task_context_digest(path) for name, path in staged.items()}
-    except ValueError:
-        _discard(staged)
-        raise
-    plan = _json({
-        **opened_with,
-        "instructions": instructions,
-        "protocol": RESEARCHER_PROTOCOL.template,
-        "context": digests["context"],
-        "runtime": python_tree_hash(Path(__file__).parent),
-        # The researcher's inputs beyond the instructions above and the context.
-        "inputs": {
-            "memory": task.memory.identity(digests.get("memory/preloaded")),
-            "environment": {
-                "harbor": None if environment is None else digest({
-                    "config": environment.config, "files": digests["environment"]}),
-                "workspace": task.environment.workspace,
-            },
-            "presenter": presenter,
-        },
-    })
-    if saved is not None and saved != plan:
-        _discard(staged)
-        raise changed
-    if source is not None:
-        before = _evaluation_plan(json.loads((source / "plan.json").read_text()))
-        differ = sorted(key for key, value in _evaluation_plan(plan).items() if before.get(key) != value)
-        if differ:
+@dataclass
+class _Opening:
+    define: object
+    task_file: Path
+    settings: RunSettings
+    output: Path
+    image: str | None
+    reviewer_image: str | None
+    opened_with: dict
+    saved: dict | None
+    source: Path | None
+    progress: object
+
+    def open(self) -> OpenRun:
+        settings, output, source = self.settings, self.output, self.source
+        run = Run(settings, output, self.image, directory=self.task_file.parent, identity=self.opened_with,
+                  continues=source / "starts.json" if source else None)
+        task = self.define(run)
+        if not isinstance(task, Task):
+            raise ValueError(f"{self.task_file} task(run) must return an ari.Task")
+        task = task.resolved(self.task_file.parent)
+        environments = {
+            "environment": harbor_environment.load(task.environment.harbor) if task.environment.harbor else None,
+            "review-environment": (harbor_environment.load(task.review_environment)
+                                   if task.review_environment is not None else None),
+        }
+        if (settings.researcher is not None and environments["environment"] is None and self.image is None) or (
+            settings.reviewer is not None and environments["review-environment"] is None
+            and self.reviewer_image is None
+        ):
+            raise ValueError("These settings configure agents, so pass their container image with --image")
+        original = ResearcherInputs.resolve(task.instructions, task_facts(
+            task.objective, sorted(snapshot(Path(task.seed))), cases=len(task.cases), repeats=settings.repeats,
+        ), environment=task.environment, memory=task.memory)
+        inputs = _transform(original, task.transforms)
+        if settings.reviewer is not None and not inputs.rules:
+            raise ValueError("Review is on but the instructions list no rules. Add rules, or write reviewer = false")
+        ledger = run.starts()
+        instructions = inputs.specification()
+        presenter = "default" if task.presenter is None else code_identity(task.presenter)
+
+        # Everything an agent may read is copied into the run, sealed by digest
+        # in the plan, and checked again whenever the run is reopened.
+        staged = {"context": _stage_context(output, task.context)}
+        try:
+            if task.memory.preload is not None:
+                staged["memory/preloaded"] = _stage_tree(output, task.memory.preload)
+            for name, environment in environments.items():
+                if environment is not None:
+                    staged[name] = harbor_environment.stage(environment, output / f".stage-{uuid4().hex}").files
+            digests = {name: task_context_digest(path) for name, path in staged.items()}
+        except BaseException:
             _discard(staged)
-            raise ValueError("Saved evidence cannot be reused: the evaluation contract changed in "
-                             + ", ".join(differ))
+            raise
+
+        def environment_identity(name):
+            environment = environments[name]
+            return None if environment is None else digest({"config": environment.config, "files": digests[name]})
+
+        plan = _json({
+            **self.opened_with,
+            "instructions": instructions,
+            "protocol": RESEARCHER_PROTOCOL.template,
+            "context": digests["context"],
+            "runtime": python_tree_hash(Path(__file__).parent),
+            # The researcher's inputs beyond the instructions above and the context.
+            "inputs": {
+                "memory": task.memory.identity(digests.get("memory/preloaded"),
+                                               summarize=_identity(task.memory.summarize)),
+                "environment": {"harbor": environment_identity("environment"),
+                                "workspace": task.environment.workspace},
+                "presenter": presenter,
+                "transforms": [code_identity(transform) for transform in task.transforms],
+                "original_instructions": original.specification() if task.transforms else None,
+            },
+            "review_environment": environment_identity("review-environment"),
+        })
+        if self.saved is not None and self.saved != plan:
+            _discard(staged)
+            raise ValueError("Run plan changed; use a fresh output")
+        if source is not None:
+            before = _evaluation_plan(json.loads((source / "plan.json").read_text()))
+            differ = sorted(key for key, value in _evaluation_plan(plan).items() if before.get(key) != value)
+            if differ:
+                _discard(staged)
+                raise ValueError("Saved evidence cannot be reused: the evaluation contract changed in "
+                                 + ", ".join(differ))
+        _place(output, staged, digests)
+        write_json(output / "plan.json", plan)
+        prepared = {
+            name: None if environment is None else harbor_environment.HarborEnvironment(
+                environment.config, output / name, output / "prepared" / f"{name}.json")
+            for name, environment in environments.items()
+        }
+
+        research = Research(
+            output / "research",
+            seed=task.seed,
+            objective=task.objective,
+            evaluator=task.evaluator,
+            validity=_validity(task, inputs, settings, self.reviewer_image, prepared["review-environment"],
+                               ledger, instructions),
+            evaluation_config={"plan": digest(_evaluation_plan(plan))},
+            limits=settings.limits,
+            tasks=task.cases,
+            progress=self.progress,
+            extends=source / "research" if source else None,
+        )
+        return OpenRun(task, settings, research, output, self.image, ledger, instructions, inputs,
+                       prepared["environment"],
+                       output / "memory/preloaded" if task.memory.preload is not None else None, presenter,
+                       prepared["review-environment"])
+
+
+def _transform(inputs: ResearcherInputs, transforms) -> ResearcherInputs:
+    """Apply a task's input transformations in order. They change content, never policy."""
+    for transform in transforms:
+        changed = transform(inputs)
+        if not isinstance(changed, ResearcherInputs):
+            raise ValueError("An input transformation must return ResearcherInputs")
+        if changed.memory != inputs.memory or changed.environment != inputs.environment:
+            raise ValueError("Input transformations change what the researcher is told, not memory or environment")
+        inputs = changed
+    return inputs
+
+
+def _identity(function) -> str | None:
+    return None if function is None else code_identity(function)
+
+
+def _place(output: Path, staged: dict, digests: dict) -> None:
+    """Move staged copies into the run, or check that the copies already there are unchanged."""
+    changed = ValueError("Run plan changed; use a fresh output")
     for name, path in staged.items():
         final = output / name
         if final.exists() or final.is_symlink():
@@ -240,37 +324,20 @@ def _open(define, task_file, settings, output, image, opened_with, saved, receip
         else:
             final.parent.mkdir(parents=True, exist_ok=True)
             path.rename(final)
-    write_json(receipt, plan)
-    if environment is not None:
-        environment = harbor_environment.HarborEnvironment(environment.config, output / "environment")
-
-    research = Research(
-        output / "research",
-        seed=task.seed,
-        objective=task.objective,
-        evaluator=task.evaluator,
-        validity=_validity(task, settings, image, ledger, instructions),
-        evaluation_config={"plan": digest(_evaluation_plan(plan))},
-        limits=settings.limits,
-        tasks=task.cases,
-        progress=progress,
-        extends=source / "research" if source else None,
-    )
-    return OpenRun(task, settings, research, output, image, ledger, instructions, inputs, environment,
-                   output / "memory/preloaded" if task.memory.preload is not None else None, presenter)
 
 
 def _evaluation_plan(plan: dict) -> dict:
     """The parts of a plan that saved validity and evaluation evidence depend on.
 
-    Allocation and the researcher's own settings and inputs are left out, so an
-    extension may raise limits or change how researchers work without
-    invalidating evidence. Repeats are in the experiment's contract.
+    Allocation and the researcher's own settings and inputs are left out, so an extension may raise limits or change how researchers work
+    without invalidating evidence. Repeats are in the experiment's contract.
     """
     settings = plan["settings"]
     return {
         "task_file": plan["task_file"],
-        "image": plan["image"],
+        "image": plan["image"],  # a task may read run.image, as the harness base does for its solver
+        "reviewer_image": plan.get("reviewer_image", plan["image"]),
+        "review_environment": plan.get("review_environment"),
         "reviewer": settings["reviewer"],
         "task": settings["task"],
         "instructions": plan["instructions"],
@@ -341,19 +408,22 @@ def _stage_context(output: Path, files: dict) -> Path:
     return staged
 
 
-def _validity(task: Task, settings: RunSettings, image, ledger, instructions: str):
+def _validity(task: Task, inputs: ResearcherInputs, settings: RunSettings, image, environment, ledger,
+              instructions: str):
     """The task's validity function, then the reviewer judging each rule the researcher was given.
 
-    The reviewer also receives ``instructions``, the exact text the researcher
-    read, so that it can tell what a rule refers to. It gets nothing else: no
-    context files, no evaluator data and no submission steps.
+    The reviewer also receives ``instructions``, the task text the researcher
+    was given, so that it can tell what a rule refers to. It gets nothing else:
+    no context files, no memory, no evaluator data and no submission steps. It
+    runs in its own image or Harbor environment, never the researcher's.
     """
     if settings.reviewer is not None:
         from .review import TASK_SPECIFICATION, LLMValidity
 
         # One check for each rule, so the verdict says which rule a candidate broke.
-        rules = {f"rule_{number}": rule for number, rule in enumerate(task.instructions.rules, 1)}
-        return LLMValidity(rules, agent=settings.reviewer, image=image, ledger=ledger,
+        rules = {f"rule_{number}": rule for number, rule in enumerate(inputs.rules, 1)}
+        return LLMValidity(rules, agent=settings.reviewer, image=None if environment else image,
+                           environment=environment, ledger=ledger,
                            context={TASK_SPECIFICATION: instructions}, precheck=task.validity)
     return task.validity or _unchecked
 
@@ -363,8 +433,24 @@ def _unchecked(candidate, context):
 
 
 def check_run(run: OpenRun) -> dict:
-    """Report the opened run without starting anything."""
+    """Report the opened run without starting, building or pulling anything."""
     return run.summary("checked")
+
+
+def prepare_run(run: OpenRun) -> dict:
+    """Build or resolve the run's Harbor environments and record their image identities.
+
+    Starts no agent and no evaluation. ``run`` and ``record`` do this first
+    themselves; calling it separately makes a build failure cost nothing.
+    """
+    _prepare(run)
+    return run.save(run.summary("prepared"))
+
+
+def _prepare(run: OpenRun) -> None:
+    for environment in (run.environment, run.review_environment):
+        if environment is not None:
+            harbor_environment.prepare(environment)
 
 
 def record_workspace(run: OpenRun) -> dict:
@@ -373,6 +459,7 @@ def record_workspace(run: OpenRun) -> dict:
     Every call saves a new candidate, including when the workspace is unchanged.
     """
     repeats = run.settings.repeats
+    _prepare(run)
     # The workspace was last saved as the newest candidate, so that is this one's parent.
     parent = next(reversed(run.research.candidates), None)
     result = run.research.record_candidate(total_repeats=repeats, parent_id=parent)
@@ -399,6 +486,7 @@ def run_researchers(run: OpenRun) -> dict:
     panel = len(run.task.cases) * repeats
     proposals, failure = [], None
     try:
+        _prepare(run)
         if research.candidates:
             research.record_candidate(BASELINE, total_repeats=repeats)
         else:
@@ -418,9 +506,9 @@ def run_researchers(run: OpenRun) -> dict:
                 proposals.append({"parent_id": parent, **propose(
                     research, agent, prompt, parent_id=parent, repeats=repeats, ledger=ledger,
                     context=run.context, history=history, load_trajectory=load,
-                    reset_workspace=inputs.environment.workspace == "reset",
+                    retain=inputs.environment.workspace == "keep",
                     record={**manifest, "presenter": run.presenter_identity,
-                            "environment": run.environment.identity if run.environment else None},
+                            "environment": run.environment.prepared() if run.environment else None},
                 )})
             finally:
                 memory_views.discard(history)

@@ -59,6 +59,14 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
     if index.get("selected_candidate") not in visible:
         index["selected_candidate"] = None
     write_json(view / "index.json", index)
+    if memory.log:
+        (view / "log.md").write_text(_log(index), encoding="utf-8")
+    if memory.summarize is not None:
+        summary = memory.summarize(json.loads(json.dumps(index)))
+        if not isinstance(summary, str):
+            raise ValueError("Memory summarize must return text")
+        (view / "summary.md").write_text(summary, encoding="utf-8")
+        manifest["summary_sha256"] = _sha256(view / "summary.md")
     if preloaded is not None:
         _copy(preloaded, view / "preloaded")
     files = memory.conversation_mode == "files" and carried
@@ -77,8 +85,34 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
         preloaded=preloaded is not None,
         conversations=tuple(entry["invocation"] for entry in carried),
         conversation_mode=memory.conversation_mode,
+        log=memory.log,
+        summary=memory.summarize is not None,
     )
     return start, view, load, manifest
+
+
+def _log(index: dict) -> str:
+    """A research log written from the controller's own records, oldest candidate first."""
+    lines = ["# Research log", "",
+             "Written by the controller before this start from its records of the candidates shown here.", ""]
+    for entry in index["candidates"]:
+        proposal = entry.get("proposal") or {}
+        evaluation = entry.get("evaluation") or {}
+        validity = entry.get("validity") or {}
+        lines += [
+            f"## {entry['id']} (from {entry.get('parent_id') or 'the starting files'})",
+            "",
+            f"- Hypothesis: {proposal.get('hypothesis', '-')}",
+            f"- Mechanism: {proposal.get('mechanism', '-')}",
+            f"- Verdict: {validity.get('verdict') or entry.get('status')}"
+            + (f" ({'; '.join(validity['reasons'])})" if validity.get("reasons") else ""),
+            f"- Score: {evaluation.get('score') if evaluation.get('score') is not None else '-'}"
+            f"; metrics: {json.dumps(evaluation.get('metrics')) if evaluation.get('metrics') else '-'}",
+            "",
+        ]
+    if index.get("selected_candidate"):
+        lines.append(f"Selected so far: {index['selected_candidate']}.")
+    return "\n".join(lines) + "\n"
 
 
 def discard(view: Path | None) -> None:

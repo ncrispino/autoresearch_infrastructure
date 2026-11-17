@@ -117,13 +117,16 @@ class LLMValidity:
     output, up to ``max_reviews``. Pass a shared ``ledger`` instead to count
     reviews across several outputs. Creating an instance never starts a model.
 
+    The reviewer runs in ``image``, or in ``environment``, a prepared Harbor
+    environment; never in the researcher's.
+
     ``precheck`` is an optional deterministic ``(candidate, context) -> Validity``
     function that runs first. The reviewer sees only candidates that pass it, so
     a malformed candidate costs no review start.
     """
 
     def __init__(
-        self, criteria: dict[str, str] | Path, *, agent, image: str,
+        self, criteria: dict[str, str] | Path, *, agent, image: str | None = None, environment=None,
         max_reviews: int | None = None, ledger: StartLedger | None = None,
         context: dict | None = None, precheck=None,
     ):
@@ -133,7 +136,10 @@ class LLMValidity:
         self.criteria = load_rules(criteria)
         self.context = _trusted_context(context)
         self.agent = native_agent_config(agent, default_timeout=240)
-        self.image = immutable_image(image, "LLM validity")
+        if (image is None) == (environment is None):
+            raise ValueError("A reviewer runs in either an image or a Harbor environment")
+        self.image = immutable_image(image, "LLM validity") if image is not None else None
+        self.environment = environment
         if ledger is not None and max_reviews is not None:
             raise ValueError("Use either a shared ledger or max_reviews, not both")
         if ledger is not None and (not isinstance(ledger, StartLedger) or "reviewer" not in ledger.limits):
@@ -159,6 +165,7 @@ class LLMValidity:
             "agent": self.agent.model_dump(mode="json"),
             "context": self.context,
             "image": self.image,
+            "environment": self.environment.identity if self.environment is not None else None,
             "baseline_hash": self.baseline_hash,
             "precheck": code_identity(self.precheck) if self.precheck else None,
         }
@@ -211,7 +218,8 @@ class LLMValidity:
             status, cost = "failed", None
             try:
                 trial = run_filesystem_agent(
-                    agent=self.agent, image=self.image, instruction=prompt + _AGENT_INSTRUCTIONS,
+                    agent=self.agent, image=self.image, environment=self.environment,
+                    instruction=prompt + _AGENT_INSTRUCTIONS,
                     workspace=verdict_path.parent.parent, evidence=context.directory / "agent",
                     readonly={
                         path: "/review/candidate",

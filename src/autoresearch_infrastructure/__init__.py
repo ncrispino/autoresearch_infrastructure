@@ -1,6 +1,6 @@
 """Optimization experiments over saved candidates, with checked validity and measured results."""
 
-from . import bases
+from . import bases, transforms
 from .api import Evaluation, EvaluationContext, Limits, Metric, Objective, Validity, ValidityContext
 from .coding_agent import CodingAgent
 from .continuations import (
@@ -20,6 +20,7 @@ from .task import Run, RunSettings, Task
 
 __all__ = [
     "bases",
+    "transforms",
     "AgentContinuationAdapter",
     "AgentContinuationCapabilities",
     "CodingAgent",
