@@ -63,8 +63,8 @@ class CodingAgent:
         evidence.mkdir(parents=True, exist_ok=False)
         agent = self.agent
         if load_trajectory is not None:
-            if not _loads_atif(agent):
-                raise ValueError("Native conversation loading needs an agent that loads ATIF trajectories")
+            if not loads_atif(agent):
+                raise ValueError("Continuing a conversation needs an agent that loads ATIF trajectories")
             agent = agent.model_copy(deep=True)
             agent.load_trajectory = str(Path(load_trajectory).resolve())
         trial = run_filesystem_agent(
@@ -80,7 +80,8 @@ class CodingAgent:
         return json.loads(metadata.read_text())
 
 
-def _loads_atif(agent) -> bool:
+def loads_atif(agent) -> bool:
+    """Whether a Harbor agent configuration can continue a saved ATIF conversation."""
     from harbor.agents.factory import AgentFactory
 
     return bool(AgentFactory.get_agent_class_from_config(agent).capabilities.load_atif_trajectory)

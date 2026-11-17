@@ -38,6 +38,9 @@ def researcher_prompt(goal: str, *, parent_id: str, repeats: int, start=None) ->
                      "before each start: every candidate shown, its idea, verdict and score. |")
         if start.summary:
             rows += "\n| `/history/summary.md` | A summary of the candidates shown, written for this run. |"
+        if start.continues:
+            evidence += (f" This start continues your earlier conversation in this run. Your workspace was reset"
+                         f" to a copy of `{parent_id}`, which may differ from the files you last saw.")
         if start.conversations and start.conversation_mode == "files":
             rows += ("\n| `/history/conversations/` | The conversations of earlier researchers in this run, "
                      "as ATIF JSON, oldest first. |")

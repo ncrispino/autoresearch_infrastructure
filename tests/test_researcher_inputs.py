@@ -169,14 +169,39 @@ def test_conversation_window_includes_failed_starts_in_time_order(example, monke
     assert inputs_records(example.output)[3]["conversations"][0]["invocation"] in conversations[3][0]
 
 
-def test_native_conversation_loading_continues_the_previous_start(example, monkeypatch):
-    seen = fixture_agent(monkeypatch)
-    run(example.make('memory=ari.Memory(conversations=1, conversation_mode="native"),'), example.output)
-    assert seen[0].load is None
-    assert [s.load for s in seen[1:]] == [{"start": 1}, {"start": 2}]
+def test_a_conversation_continues_for_k_proposals_then_a_fresh_one_begins(example, monkeypatch):
+    seen = fixture_agent(monkeypatch, fail_on=(5,))
+    seven = f"reviewer = false\n[limits]\ncandidates = 8\nevaluations = 8\n[researcher]\n{AGENT}"
+    run(example.make('memory=ari.Memory(conversations=3, conversation_mode="continue"),', settings=seven),
+        example.output)
+    # Starts 1-3 share a conversation, 4-6 the next, 7 begins a third. Each continuing start loads
+    # what the latest earlier start of its group saved, including a failed start's conversation.
+    assert [s.load for s in seen] == [None, {"start": 1}, {"start": 2}, None, {"start": 4}, {"start": 5}, None]
     assert not any(f.startswith("conversations/") for s in seen for f in s.files)
-    with pytest.raises(ValueError, match="conversations=1"):
-        Memory(conversations=2, conversation_mode="native")
+    assert "continues your earlier conversation" in seen[1].prompt
+    assert "continues your earlier conversation" not in seen[3].prompt
+    assert "candidates/candidate-0001/snapshot/value.json" in seen[1].files  # the canonical history
+    records = inputs_records(example.output)
+    assert records[3]["conversations"] == [] and records[1]["load_trajectory"]
+    assert records[1]["history"]["view"] == "canonical"
+
+
+def test_all_never_begins_a_fresh_conversation(example, monkeypatch):
+    seen = fixture_agent(monkeypatch)
+    run(example.make('memory=ari.Memory(conversations="all", conversation_mode="continue"),'), example.output)
+    assert [s.load for s in seen] == [None, {"start": 1}, {"start": 2}]
+
+
+def test_continuing_needs_two_or_more_proposals_and_an_agent_that_loads_conversations(example):
+    for count in (0, 1):
+        with pytest.raises(ValueError, match="2 or more"):
+            Memory(conversations=count, conversation_mode="continue")
+    terminus = ('reviewer = false\n[limits]\ncandidates = 3\n[researcher]\nname = "terminus-2"\n'
+                'model_name = "openai/fixture"\n')
+    directory = example.make('memory=ari.Memory(conversations=2, conversation_mode="continue"),', settings=terminus)
+    with pytest.raises(ValueError, match="loads ATIF"):
+        launch.open_run(directory, directory / "run.toml", example.output, IMAGE)
+    assert not example.output.exists()
 
 
 def test_workspace_reset_removes_files_outside_the_candidate(example, monkeypatch):

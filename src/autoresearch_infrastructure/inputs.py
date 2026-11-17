@@ -25,7 +25,7 @@ from typing import Callable
 from .instructions import Instructions
 
 _HISTORY = ("all", "none")
-_CONVERSATION_MODES = ("files", "native")
+_CONVERSATION_MODES = ("files", "continue")
 _WORKSPACE = ("keep", "reset")
 
 
@@ -42,18 +42,23 @@ class Memory:
         ``/history/preloaded/``. Its contents are researcher input only: they
         are never treated as results, candidates or spent budget of this run.
     ``conversations``
-        How many earlier researcher conversations of this run each start
-        receives: ``0`` (the default) for none, a positive integer ``k`` for the
-        conversations of the last ``k`` starts that saved one, or ``"all"``. The
-        window slides in time order over every earlier start, including failed
-        ones and ones whose candidate was not selected; a start that saved no
-        conversation is skipped.
+        How much of earlier researcher conversations carries over: ``0`` (the
+        default) for none, a positive integer ``k``, or ``"all"``. What ``k``
+        counts depends on ``conversation_mode``. Starts are counted in time
+        order and include failed ones and ones whose candidate was not selected.
     ``conversation_mode``
-        ``"files"`` mounts the selected conversations as ATIF JSON under
-        ``/history/conversations/``. ``"native"`` loads the previous start's
-        conversation into the agent through Harbor's ``load_trajectory``, so the
-        start continues it; it needs ``conversations=1`` and an agent with ATIF
-        loading support.
+        ``"files"`` (the default): every start is a fresh conversation that can
+        read the conversations of the last ``k`` starts that saved one, as ATIF
+        JSON under ``/history/conversations/``.
+
+        ``"continue"``: one conversation continues for ``k`` proposals, then a
+        fresh one begins. Starts 1 to ``k`` share a conversation, starts
+        ``k + 1`` to ``2k`` the next, and so on; ``"all"`` never begins a fresh
+        one. A continuing start loads the conversation saved by the latest
+        earlier start of its group through Harbor's ``load_trajectory``. Each
+        proposal is still one charged start with one submission from the
+        controller's chosen parent. It needs ``k`` of at least 2 and an agent
+        that loads ATIF trajectories, such as Claude Code or Codex.
     ``log``
         ``True`` adds ``/history/log.md``, a research log ARI writes from its
         own records before each start: every visible candidate's parent,
@@ -77,9 +82,9 @@ class Memory:
         if self.conversations != "all" and not (type(self.conversations) is int and self.conversations >= 0):
             raise ValueError('Memory conversations is 0, a positive number of starts, or "all"')
         if self.conversation_mode not in _CONVERSATION_MODES:
-            raise ValueError('Memory conversation_mode is "files" or "native"')
-        if self.conversation_mode == "native" and self.conversations != 1:
-            raise ValueError("Native conversation loading carries exactly the previous start: use conversations=1")
+            raise ValueError('Memory conversation_mode is "files" or "continue"')
+        if self.conversation_mode == "continue" and self.conversations in (0, 1):
+            raise ValueError('A conversation continues for 2 or more proposals, or "all": set conversations')
         if type(self.log) is not bool:
             raise ValueError("Memory log is True or False")
         if self.summarize is not None and not callable(self.summarize):
@@ -186,7 +191,8 @@ class Start:
     ``visible`` lists the candidates shown under ``/history/``; ``None`` means
     every candidate. ``preloaded`` says whether ``/history/preloaded/`` exists,
     and ``conversations`` names the earlier starts whose conversations are
-    mounted or loaded.
+    mounted as files or, in ``"continue"`` mode, the one start whose
+    conversation is loaded.
     """
 
     number: int
@@ -198,6 +204,11 @@ class Start:
     conversation_mode: str = "files"
     log: bool = False
     summary: bool = False
+
+    @property
+    def continues(self) -> bool:
+        """Whether this start continues an earlier conversation rather than beginning one."""
+        return self.conversation_mode == "continue" and bool(self.conversations)
 
 
 Presenter = Callable[[ResearcherInputs, Start], str]

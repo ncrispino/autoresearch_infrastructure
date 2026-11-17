@@ -920,10 +920,21 @@ ari.Task(..., memory=ari.Memory(history=3, conversations=2))
 | --- | --- | --- |
 | `history` | `"all"` (default), `"none"`, or `n` | Which earlier candidates appear under `/history`: all, none, or the `n` most recently recorded. |
 | `preload` | A directory | Earlier experiment records, such as another run's `history/`, shown under `/history/preloaded/`. They are copied into the run and sealed in the plan. They never become candidates, results or spent budget. |
-| `conversations` | `0` (default), `k`, or `"all"` | Earlier researcher conversations of this run that each start receives: those of the last `k` starts that saved one, in time order. Failed starts and starts whose candidate was not selected count. |
-| `conversation_mode` | `"files"` (default) or `"native"` | `"files"` mounts the conversations as ATIF JSON under `/history/conversations/`. `"native"` loads the previous start's conversation into the agent through Harbor's `load_trajectory`, so the start continues it. It needs `conversations=1` and an agent that loads ATIF trajectories, such as Claude Code or Codex. |
+| `conversations` | `0` (default), `k`, or `"all"` | How much of earlier researcher conversations carries over. What `k` counts depends on `conversation_mode`. Starts are counted in time order, including failed starts and starts whose candidate was not selected. |
+| `conversation_mode` | `"files"` (default) or `"continue"` | `"files"`: every start is a fresh conversation that can read the conversations of the last `k` starts that saved one, as ATIF JSON under `/history/conversations/`. `"continue"`: one conversation continues for `k` proposals, then a fresh one begins. See below. |
 | `log` | `False` (default) or `True` | Adds `/history/log.md`, a research log ARI writes from its own records before each start: every visible candidate's parent, hypothesis, mechanism, verdict and score. |
 | `summarize` | A function `(index) -> str` | Shown as `/history/summary.md`. It receives the visible `/history/index.json` content. It is trusted code: its identity goes into the plan and its output's hash into each start's record. |
+
+With `conversation_mode="continue"` and `conversations=3`, starts 1 to 3 share
+one conversation, starts 4 to 6 the next, and start 7 begins a third. `"all"`
+never begins a fresh one. A continuing start loads the conversation saved by
+the latest earlier start of its group through Harbor's `load_trajectory`, and
+its prompt says that the workspace was reset to the current parent. Each
+proposal is still one charged start with one submission from the parent the
+controller chose. It needs `k` of at least 2 and a researcher agent that loads
+ATIF trajectories, such as Claude Code or Codex; `ari check` refuses other
+agents. Nothing shortens a long conversation, so `"all"` can outgrow a model's
+context on a long run.
 
 With the default memory, a start mounts the canonical history. Any other policy
 builds a separate view for that start, so a hidden record is not reachable
@@ -1029,7 +1040,7 @@ changes. Every start saves, under `agent/inputs/<invocation>/`:
 | Building and recording images | Now: `ari prepare` | Actual main and sidecar image identities, reused by every start |
 | Which earlier candidates are visible | Now: `memory.history` | Separate per-start views over trusted evidence |
 | Preloaded records | Now: `memory.preload` | Sealed copies that never count as evidence |
-| Earlier researcher conversations | Now: `memory.conversations` | Selection over the run's starts; native loading is Harbor's `load_trajectory` |
+| Earlier researcher conversations | Now: `memory.conversations`, `memory.conversation_mode` | Which starts' conversations are read as files, or how many proposals one conversation continues for; loading is Harbor's `load_trajectory` |
 | Research log and summaries | Now: `memory.log`, `memory.summarize` | Written from trusted records; summaries recorded |
 | Reviewer environment | Now: `--reviewer-image`, `review_environment` | Independent of the researcher's |
 | Continuing a finished run | Now: `ari extend` | Verified import, cumulative budgets, lineage |

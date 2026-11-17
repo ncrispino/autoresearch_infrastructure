@@ -26,23 +26,29 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
     """Choose what this start sees.
 
     Returns the ``Start`` for the presenter, the directory to mount at
-    ``/history`` (``None`` for the canonical history), the conversation to load
-    natively (or ``None``), and the manifest to save with the start.
+    ``/history`` (``None`` for the canonical history), the conversation for the
+    agent to continue (or ``None``), and the manifest to save with the start.
     """
     canonical = research.root / "history"
     index = json.loads((canonical / "index.json").read_text())
     order = [entry["id"] for entry in index["candidates"]]
     hashes = {cid: research.candidates[cid]["source_hash"] for cid in order}
-    carried = _conversations(research, memory)
+    carried = _conversations(research, memory, number)
     manifest = {"memory": memory.identity(), "conversations": carried}
     load = None
-    if memory.conversation_mode == "native" and carried:
+    if memory.conversation_mode == "continue" and carried:
         load = research.root / carried[-1]["trajectory"]
         _check(load, carried[-1]["sha256"])
-    if memory.is_default:
+    files = memory.conversation_mode == "files" and carried
+    if (memory.history == "all" and preloaded is None and not memory.log and memory.summarize is None
+            and not files):
+        # Nothing is hidden or added under /history, so the canonical history is mounted as it is.
         manifest["history"] = {"view": "canonical", "candidates": hashes,
                                "index_sha256": _sha256(canonical / "index.json")}
-        return Start(number, parent_id, repeats), None, load, manifest
+        start = Start(number, parent_id, repeats,
+                      conversations=tuple(entry["invocation"] for entry in carried),
+                      conversation_mode=memory.conversation_mode)
+        return start, None, load, manifest
 
     if memory.history == "all":
         visible = order
@@ -69,7 +75,6 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
         manifest["summary_sha256"] = _sha256(view / "summary.md")
     if preloaded is not None:
         _copy(preloaded, view / "preloaded")
-    files = memory.conversation_mode == "files" and carried
     if files:
         for number_, entry in enumerate(carried, 1):
             source = research.root / entry["trajectory"]
@@ -120,12 +125,25 @@ def discard(view: Path | None) -> None:
         _remove(view)
 
 
-def _conversations(research, memory: Memory) -> list[dict]:
-    """The conversations of the last ``k`` starts that saved one, oldest first."""
+def _conversations(research, memory: Memory, number: int) -> list[dict]:
+    """The earlier conversations start ``number`` receives, oldest first.
+
+    In ``"files"`` mode these are the conversations of the last ``k`` starts
+    that saved one. In ``"continue"`` mode it is at most one: the conversation
+    saved by the latest earlier start of this start's group of ``k``, which
+    already contains what that group said before it. The first start of a
+    group, or a group whose earlier starts saved nothing, gets none.
+    """
     if memory.conversations == 0:
         return []
+    starts = researcher_starts(research)
+    if memory.conversation_mode == "continue":
+        position = number - 1 if memory.conversations == "all" else (number - 1) % memory.conversations
+        starts = starts[number - 1 - position:number - 1]
     saved = [{"invocation": s["invocation"], "trajectory": s["trajectory"], "sha256": s["trajectory_sha256"]}
-             for s in researcher_starts(research) if s.get("trajectory")]
+             for s in starts if s.get("trajectory")]
+    if memory.conversation_mode == "continue":
+        return saved[-1:]
     return saved if memory.conversations == "all" else saved[-memory.conversations:]
 
 

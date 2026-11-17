@@ -232,6 +232,14 @@ class _Opening:
             task.objective, sorted(snapshot(Path(task.seed))), cases=len(task.cases), repeats=settings.repeats,
         ), environment=task.environment, memory=task.memory)
         inputs = _transform(original, task.transforms)
+        if task.memory.conversation_mode == "continue" and settings.researcher is not None:
+            from harbor.models.trial.config import AgentConfig
+
+            from .coding_agent import loads_atif
+
+            if not loads_atif(AgentConfig.model_validate(settings.researcher)):
+                raise ValueError('Memory conversation_mode="continue" needs a researcher agent that loads ATIF '
+                                 'trajectories, such as Claude Code or Codex; use "files" with this agent')
         if settings.reviewer is not None and not inputs.rules:
             raise ValueError("Review is on but the instructions list no rules. Add rules, or write reviewer = false")
         replay = _replay_plan(self.replayed, Path(task.seed), settings) if self.replayed else None
