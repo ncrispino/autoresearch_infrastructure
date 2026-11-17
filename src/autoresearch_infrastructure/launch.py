@@ -64,6 +64,13 @@ class OpenRun:
             "budget": research.budget_summary(),
             **extra,
         }
+        lineage = research.state.get("lineage")
+        if lineage:
+            summary["extends"] = {
+                "source": str(Path(lineage["source"]).parent),  # the run directory, not its research/
+                "imported_candidates": lineage["imported_candidates"],
+                "source_limits": lineage["source_limits"],
+            }
         if self.ledger is not None:
             starts = self.ledger.snapshot()
             costs = [start.get("cost_usd") for start in starts["starts"].values()]
@@ -110,11 +117,16 @@ def _row(research: Research, candidate_id: str) -> dict:
 
 
 def open_run(task_path: Path, settings_path: Path | None, output: Path, image: str | None, *,
-             progress=None) -> OpenRun:
+             progress=None, extends: Path | None = None) -> OpenRun:
     """Load the task and settings, freeze them in ``plan.json``, and open the experiment.
 
     This starts no agent and no evaluation. Reopening an output with a different
     task, settings or image is refused, so a run's budget cannot be reset.
+
+    ``extends`` names a finished run directory to continue in this new output:
+    its candidates, evidence and usage are verified and copied, and the
+    settings' limits are cumulative totals. The source is never written.
+    Reopening an extension finds its source in ``plan.json``.
     """
     define, task_file = load_task(task_path)
     settings = RunSettings.load(settings_path) if settings_path else RunSettings.parse({})
@@ -126,19 +138,36 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
 
         immutable_image(image, "A run with agents")
     output = Path(output).resolve()
+    receipt = output / "plan.json"
+    saved = json.loads(receipt.read_text()) if receipt.exists() else None
+    if extends is None and saved is not None and saved.get("extends"):
+        extends = Path(saved["extends"]["source"])
+    source = None if extends is None else _extension_source(Path(extends), output, saved)
     opened_with = _json({
         "settings": settings.identity(),
         "image": image,
         "task_file": hashlib.sha256(task_file.read_bytes()).hexdigest(),
+        **({"extends": _lineage(source)} if source else {}),
     })
-    receipt = output / "plan.json"
-    saved = json.loads(receipt.read_text()) if receipt.exists() else None
     changed = ValueError("Run plan changed; use a fresh output")
     if saved is not None and any(saved.get(key) != value for key, value in opened_with.items()):
         raise changed
 
+    created = not output.exists()
     output.mkdir(parents=True, exist_ok=True)
-    run = Run(settings, output, image, directory=task_file.parent, identity=opened_with)
+    try:
+        return _open(define, task_file, settings, output, image, opened_with, saved, receipt, changed,
+                     missing_image, progress, source)
+    except BaseException:
+        if created and source is not None:
+            _remove_tree(output)  # a rejected extension leaves no child behind
+        raise
+
+
+def _open(define, task_file, settings, output, image, opened_with, saved, receipt, changed, missing_image,
+          progress, source):
+    run = Run(settings, output, image, directory=task_file.parent, identity=opened_with,
+              continues=source / "starts.json" if source else None)
     task = define(run)
     if not isinstance(task, Task):
         raise ValueError(f"{task_file} task(run) must return an ari.Task")
@@ -189,6 +218,13 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
     if saved is not None and saved != plan:
         _discard(staged)
         raise changed
+    if source is not None:
+        before = _evaluation_plan(json.loads((source / "plan.json").read_text()))
+        differ = sorted(key for key, value in _evaluation_plan(plan).items() if before.get(key) != value)
+        if differ:
+            _discard(staged)
+            raise ValueError("Saved evidence cannot be reused: the evaluation contract changed in "
+                             + ", ".join(differ))
     for name, path in staged.items():
         final = output / name
         if final.exists() or final.is_symlink():
@@ -214,13 +250,52 @@ def open_run(task_path: Path, settings_path: Path | None, output: Path, image: s
         objective=task.objective,
         evaluator=task.evaluator,
         validity=_validity(task, settings, image, ledger, instructions),
-        evaluation_config={"plan": digest(plan)},
+        evaluation_config={"plan": digest(_evaluation_plan(plan))},
         limits=settings.limits,
         tasks=task.cases,
         progress=progress,
+        extends=source / "research" if source else None,
     )
     return OpenRun(task, settings, research, output, image, ledger, instructions, inputs, environment,
                    output / "memory/preloaded" if task.memory.preload is not None else None, presenter)
+
+
+def _evaluation_plan(plan: dict) -> dict:
+    """The parts of a plan that saved validity and evaluation evidence depend on.
+
+    Allocation and the researcher's own settings and inputs are left out, so an
+    extension may raise limits or change how researchers work without
+    invalidating evidence. Repeats are in the experiment's contract.
+    """
+    settings = plan["settings"]
+    return {
+        "task_file": plan["task_file"],
+        "image": plan["image"],
+        "reviewer": settings["reviewer"],
+        "task": settings["task"],
+        "instructions": plan["instructions"],
+        "context": plan["context"],
+        "runtime": plan["runtime"],
+    }
+
+
+def _extension_source(source: Path, output: Path, saved) -> Path:
+    source = source.resolve()
+    if source == output or output.is_relative_to(source) or source.is_relative_to(output):
+        raise ValueError("An extension needs its own output, outside the source run")
+    if not (source / "plan.json").is_file() or not (source / "research/state.json").is_file():
+        raise ValueError(f"No finished run to extend at {source}")
+    if saved is None and output.exists() and any(output.iterdir()):
+        raise ValueError("An extension needs a fresh output")
+    return source
+
+
+def _lineage(source: Path) -> dict:
+    """The source files an extension is bound to; any later change to them is refused."""
+    def sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+    return {"source": str(source), "plan": sha(source / "plan.json"), "starts": sha(source / "starts.json")}
 
 
 def _json(value):

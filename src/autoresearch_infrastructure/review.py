@@ -151,15 +151,14 @@ class LLMValidity:
 
     @property
     def identity(self):
+        """What a verdict depends on. The review budget is not part of it: the
+        ledger enforces that, and a larger budget does not change a verdict."""
         return {
             "harbor": importlib.metadata.version("harbor"),
             "criteria": dict(self.criteria),
             "agent": self.agent.model_dump(mode="json"),
             "context": self.context,
             "image": self.image,
-            "max_reviews": self.max_reviews,
-            "shared_allocation": self.ledger.identity_hash if self.ledger else None,
-            "shared_limits": self.ledger.limits if self.ledger else None,
             "baseline_hash": self.baseline_hash,
             "precheck": code_identity(self.precheck) if self.precheck else None,
         }
@@ -181,7 +180,8 @@ class LLMValidity:
         path = self._output / "validity-starts.json"
         if not create and not path.exists():
             return None
-        return StartLedger(path, limits={"reviewer": self.max_reviews}, identity=self.identity)
+        return StartLedger(path, limits={"reviewer": self.max_reviews},
+                           identity={**self.identity, "max_reviews": self.max_reviews})
 
     def review_budget(self) -> dict:
         """Review starts: the limit, those used, and those held back for a later stage."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -84,6 +85,7 @@ class Research(EvaluationLifecycle):
         tasks: tuple[str, ...] = ("default",),
         conditions: tuple[str, ...] = ("default",),
         progress: Callable[[dict], None] | None = None,
+        extends: Path | None = None,
     ):
         if progress is not None and not callable(progress):
             raise ValueError("progress must be a callable observer or None")
@@ -121,10 +123,13 @@ class Research(EvaluationLifecycle):
         if isinstance(validity, LLMValidity):
             validity = validity.for_output(self.output, baseline=self.root / "seed", baseline_hash=seed_hash)
         self.validity = validity
+        # The contract is what makes evidence comparable. Allocation (how many
+        # candidates and evaluations, how many at once) is not part of it, so a
+        # verified extension can reuse evidence under larger limits.
         contract = {
             "objective": objective.identity(),
             "metrics": [asdict(m) for m in self.metrics],
-            "limits": asdict(limits),
+            "limits": {"max_repeats": limits.max_repeats, "selection_repeats": limits.selection_repeats},
             "evaluation_config": evaluation_config,
             "seed_hash": seed_hash,
             "tasks": tasks,
@@ -150,7 +155,9 @@ class Research(EvaluationLifecycle):
                 self._allocations.enter_context(self._ledgers[path].allocation_owner())
             fcntl.flock(self._writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if self.state_path.exists():
-                self._resume(seed_hash)
+                self._resume(seed_hash, extends)
+            elif extends is not None:
+                self._import(Path(extends), seed_hash, contract)
             else:
                 self._create(seed_payload, contract)
             self._write_history_index()
@@ -160,12 +167,22 @@ class Research(EvaluationLifecycle):
 
     # ---- Opening and closing an output
 
-    def _resume(self, seed_hash: str) -> None:
+    def _allocation(self) -> dict:
+        return {**asdict(self.config), "max_solver_trial_starts": self.config.max_evaluations}
+
+    def _resume(self, seed_hash: str, extends: Path | None = None) -> None:
         self.state = json.loads(self.state_path.read_text())
         if self.state.get("schema_version") != self.SCHEMA:
             raise ValueError("Unsupported research state")
-        if self._session(_SESSION)["contract_hash"] != self.contract_hash:
+        if self._session(_SESSION)["contract_hash"] != self.contract_hash or (
+            self.state["config"] != self._allocation()
+        ):
             raise ValueError("Experiment setup changed; use a fresh output")
+        lineage = self.state.get("lineage")
+        if (extends is None) != (lineage is None) or (
+            lineage is not None and lineage["receipt"] != _import_receipt(Path(extends).resolve())
+        ):
+            raise ValueError("The extended source run changed, or this output extends a different run")
         if digest(snapshot(self.root / "seed")) != seed_hash:
             raise ValueError("Saved starting files changed")
         self._recover_interrupted_trial_starts()
@@ -212,6 +229,78 @@ class Research(EvaluationLifecycle):
             "phase": {"index": 0, "role": "research", "status": "active"},
         }
         write_json(self.output / "contract.json", contract)
+        self._save_state()
+
+    def _import(self, source: Path, seed_hash: str, contract: dict) -> None:
+        """Start this output from a verified copy of a finished experiment.
+
+        The source is read, never written. Its candidates, evidence, selection
+        and usage are copied; usage counts against this output's larger limits.
+        Evidence is reused only under an identical contract, and every snapshot,
+        result and artifact is checked against its saved hash before the output
+        is usable. On any failure the copied files are removed.
+        """
+        source = source.resolve()
+        if source == self.output or not (source / "state.json").is_file():
+            raise ValueError(f"No finished experiment to extend at {source}")
+        if any(path.name != ".writer.lock" for path in self.output.iterdir()):
+            raise ValueError("Output has partial or unrelated files; use a fresh output")
+        state = json.loads((source / "state.json").read_text())
+        if state.get("schema_version") != self.SCHEMA or set(state["sessions"]) != {_SESSION}:
+            raise ValueError("The source is not an experiment this version can extend")
+        saved = json.loads((source / "contract.json").read_text())
+        session = state["sessions"][_SESSION]
+        if digest(saved) != session["contract_hash"]:
+            raise ValueError("The source contract does not match its state; it was edited")
+        if session["contract_hash"] != self.contract_hash:
+            changed = sorted(key for key in contract.keys() | saved.keys() if contract.get(key) != saved.get(key))
+            raise ValueError("Saved evidence cannot be reused: the evaluation contract changed in "
+                             + ", ".join(changed))
+        if any(item.get("status") == "active" for item in state.get("reservations", {}).values()) or any(
+            attempt.get("status") == "started"
+            for record in session["candidates"].values()
+            for evidence in record.get("evidence", {}).values()
+            for cell in evidence.get("cells", {}).values()
+            for attempt in cell.get("trial_starts", [])
+        ):
+            raise ValueError("The source has an interrupted evaluation; resume it to completion first")
+        previous = state["config"]
+        for name in ("max_candidates", "max_evaluations"):
+            if getattr(self.config, name) < previous[name]:
+                raise ValueError(f"An extension cannot lower {name} below the source's {previous[name]}")
+        receipt = _import_receipt(source)
+        for item in sorted(source.iterdir()):
+            if item.name in {".writer.lock", "state.json"}:
+                continue
+            target = self.output / item.name
+            if item.is_dir() and not item.is_symlink():
+                shutil.copytree(item, target, symlinks=True)
+            else:
+                shutil.copy2(item, target, follow_symlinks=False)
+        state["config"] = self._allocation()
+        state["instances"][_SESSION]["solver_trial_start_limit"] = self.config.max_evaluations
+        state["lineage"] = {
+            "source": str(source),
+            "receipt": receipt,
+            "imported_candidates": list(session["candidates"]),
+            "source_limits": {name: previous[name] for name in ("max_candidates", "max_evaluations")},
+        }
+        self.state = state
+        try:
+            if digest(snapshot(self.root / "seed")) != seed_hash:
+                raise ValueError("The source's starting files differ from this task's seed")
+            for candidate_id in self.candidates:
+                self.candidate_files(candidate_id)
+                self.evaluation_artifacts(candidate_id)
+            if self.proposals > self.config.max_candidates or (
+                state["solver_trial_starts"] > self.config.max_evaluations
+            ):
+                raise ValueError("The source already used more than the extension's limits")
+        except BaseException:
+            for item in list(self.output.iterdir()):
+                if item.name != ".writer.lock":
+                    _remove(item)
+            raise
         self._save_state()
 
     def close(self):
@@ -921,3 +1010,25 @@ class _Display:
                 **details,
             }
         self.observer(event)
+
+
+def _import_receipt(source: Path) -> str:
+    """Bind an extension to its source's state, contract and evidence inventory."""
+    state = (source / "state.json").read_bytes()
+    session = json.loads(state)["sessions"][_SESSION]
+    return digest({
+        "state": hashlib.sha256(state).hexdigest(),
+        "contract": hashlib.sha256((source / "contract.json").read_bytes()).hexdigest(),
+        "candidates": {cid: record["source_hash"] for cid, record in session["candidates"].items()},
+        "selected": session["selected"],
+    })
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        for current, dirs, _ in os.walk(path):
+            for name in dirs:
+                (Path(current) / name).chmod(0o755)
+        shutil.rmtree(path)
+    else:
+        path.unlink()

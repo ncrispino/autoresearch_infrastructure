@@ -959,6 +959,8 @@ def build_index(output: Path, *, partial_evidence: Path | None = None) -> dict:
             except ValueError as exc:
                 warnings.append(str(exc))
     sessions = []
+    lineage = state.get("lineage") if isinstance(state.get("lineage"), dict) else None
+    imported = set(lineage.get("imported_candidates", [])) if lineage else set()
     live_contract = False
     all_tasks: set[str] = set()
     comparison_bytes = [MAX_CANDIDATE_COMPARISON_TOTAL_BYTES]
@@ -1069,6 +1071,7 @@ def build_index(output: Path, *, partial_evidence: Path | None = None) -> dict:
                     "sequence": _candidate_sequence(candidate_id),
                     "parent_id": candidate.get("parent_id"),
                     "status": candidate.get("status"),
+                    "imported": candidate_id in imported,
                     "proposal": proposal if isinstance(proposal, dict) else None,
                     "completed_valid_for_approach": approach_counts.get(approach, 0),
                     "created_at": _timestamp(candidate.get("created_at")),
@@ -1201,6 +1204,11 @@ def build_index(output: Path, *, partial_evidence: Path | None = None) -> dict:
             "mode": state.get("evidence_mode", "live" if live_contract else "offline fixture"),
             "offline": not live_contract,
             "output": str(output),
+            "extends": None if lineage is None else {
+                "source": lineage.get("source"),
+                "imported_candidates": len(imported),
+                "source_limits": lineage.get("source_limits"),
+            },
             "max_repeats": config.get("max_repeats"),
             "max_valid_candidates_per_approach": config.get("max_valid_candidates_per_approach"),
             "reserved_solver_trial_starts": sum(

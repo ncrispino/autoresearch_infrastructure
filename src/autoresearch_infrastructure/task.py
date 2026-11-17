@@ -208,8 +208,9 @@ class Run:
     """
 
     def __init__(self, settings: RunSettings, output: Path, image: str | None = None, *,
-                 directory: Path | None = None, identity=None):
+                 directory: Path | None = None, identity=None, continues: Path | None = None):
         self.settings, self.output, self.image = settings, Path(output), image
+        self._continues = Path(continues) if continues is not None else None
         self.directory = Path(directory) if directory is not None else Path.cwd()
         self._identity = identity if identity is not None else settings.identity()
         self._ledger: StartLedger | None = None
@@ -224,7 +225,12 @@ class Run:
         if self._ledger is None:
             limits = {**self.settings.starts, **more}
             if limits:
-                self._ledger = StartLedger(self.output / "starts.json", limits=limits, identity=self._identity)
+                path = self.output / "starts.json"
+                if self._continues is not None and self._continues.is_file():
+                    self._ledger = StartLedger.continued(path, self._continues, limits=limits,
+                                                         identity=self._identity)
+                else:
+                    self._ledger = StartLedger(path, limits=limits, identity=self._identity)
         elif more:
             raise ValueError("Name a task's start kinds in one call to run.starts(...)")
         return self._ledger
