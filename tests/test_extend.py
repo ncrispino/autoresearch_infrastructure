@@ -53,7 +53,7 @@ def fixture_agent(monkeypatch, values, *, fail_on=()):
         def __init__(self, *, agent, image=None, environment=None):
             pass
 
-        def run(self, prompt, *, workspace, evidence, readonly, recorder, jobs_root, load_trajectory=None):
+        def run(self, prompt, *, workspace, evidence, readonly, recorder, jobs_root):
             history = next(path for path, target in readonly.items() if target == "/history")
             seen.append({"prompt": prompt, "start": json.loads((workspace / "candidate/value.json").read_text()),
                          "index": json.loads((Path(history) / "index.json").read_text())})

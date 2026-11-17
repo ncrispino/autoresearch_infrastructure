@@ -22,33 +22,30 @@ from .search import researcher_starts
 
 
 def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: int,
-            preloaded: Path | None, view: Path) -> tuple[Start, Path | None, Path | None, dict]:
+            preloaded: Path | None, view: Path) -> tuple[Start, Path | None, dict]:
     """Choose what this start sees.
 
     Returns the ``Start`` for the presenter, the directory to mount at
-    ``/history`` (``None`` for the canonical history), the conversation for the
-    agent to continue (or ``None``), and the manifest to save with the start.
+    ``/history`` (``None`` for the canonical history), and the manifest to
+    save with the start. Calling it again with the same ``view`` refreshes
+    that directory in place, so a session that is still running sees the update.
     """
     canonical = research.root / "history"
     index = json.loads((canonical / "index.json").read_text())
     order = [entry["id"] for entry in index["candidates"]]
     hashes = {cid: research.candidates[cid]["source_hash"] for cid in order}
-    carried = _conversations(research, memory, number)
+    carried = _conversations(research, memory)
     manifest = {"memory": memory.identity(), "conversations": carried}
-    load = None
-    if memory.conversation_mode == "continue" and carried:
-        load = research.root / carried[-1]["trajectory"]
-        _check(load, carried[-1]["sha256"])
-    files = memory.conversation_mode == "files" and carried
+    files = bool(carried)
+    submissions = 1
+    if memory.conversation_mode == "continue":
+        submissions = None if memory.conversations == "all" else memory.conversations
     if (memory.history == "all" and preloaded is None and not memory.log and memory.summarize is None
             and not files):
         # Nothing is hidden or added under /history, so the canonical history is mounted as it is.
         manifest["history"] = {"view": "canonical", "candidates": hashes,
                                "index_sha256": _sha256(canonical / "index.json")}
-        start = Start(number, parent_id, repeats,
-                      conversations=tuple(entry["invocation"] for entry in carried),
-                      conversation_mode=memory.conversation_mode)
-        return start, None, load, manifest
+        return Start(number, parent_id, repeats, submissions=submissions), None, manifest
 
     if memory.history == "all":
         visible = order
@@ -56,9 +53,9 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
         visible = []
     else:
         visible = order[-memory.history:]
-    if view.exists():
-        _remove(view)
-    view.mkdir(parents=True)
+    view.mkdir(parents=True, exist_ok=True)
+    for child in view.iterdir():  # emptied in place: a running session has this directory mounted
+        _remove(child) if child.is_dir() else child.unlink()
     for cid in visible:
         _copy(canonical / "candidates" / cid, view / "candidates" / cid)
     index["candidates"] = [entry for entry in index["candidates"] if entry["id"] in visible]
@@ -92,8 +89,9 @@ def prepare(research, memory: Memory, *, number: int, parent_id: str, repeats: i
         conversation_mode=memory.conversation_mode,
         log=memory.log,
         summary=memory.summarize is not None,
+        submissions=submissions,
     )
-    return start, view, load, manifest
+    return start, view, manifest
 
 
 def _log(index: dict) -> str:
@@ -125,25 +123,12 @@ def discard(view: Path | None) -> None:
         _remove(view)
 
 
-def _conversations(research, memory: Memory, number: int) -> list[dict]:
-    """The earlier conversations start ``number`` receives, oldest first.
-
-    In ``"files"`` mode these are the conversations of the last ``k`` starts
-    that saved one. In ``"continue"`` mode it is at most one: the conversation
-    saved by the latest earlier start of this start's group of ``k``, which
-    already contains what that group said before it. The first start of a
-    group, or a group whose earlier starts saved nothing, gets none.
-    """
-    if memory.conversations == 0:
+def _conversations(research, memory: Memory) -> list[dict]:
+    """In ``"files"`` mode, the conversations of the last ``k`` starts that saved one, oldest first."""
+    if memory.conversations == 0 or memory.conversation_mode != "files":
         return []
-    starts = researcher_starts(research)
-    if memory.conversation_mode == "continue":
-        position = number - 1 if memory.conversations == "all" else (number - 1) % memory.conversations
-        starts = starts[number - 1 - position:number - 1]
     saved = [{"invocation": s["invocation"], "trajectory": s["trajectory"], "sha256": s["trajectory_sha256"]}
-             for s in starts if s.get("trajectory")]
-    if memory.conversation_mode == "continue":
-        return saved[-1:]
+             for s in researcher_starts(research) if s.get("trajectory")]
     return saved if memory.conversations == "all" else saved[-memory.conversations:]
 
 

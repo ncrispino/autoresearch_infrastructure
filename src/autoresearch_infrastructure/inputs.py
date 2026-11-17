@@ -51,14 +51,15 @@ class Memory:
         read the conversations of the last ``k`` starts that saved one, as ATIF
         JSON under ``/history/conversations/``.
 
-        ``"continue"``: one conversation continues for ``k`` proposals, then a
-        fresh one begins. Starts 1 to ``k`` share a conversation, starts
-        ``k + 1`` to ``2k`` the next, and so on; ``"all"`` never begins a fresh
-        one. A continuing start loads the conversation saved by the latest
-        earlier start of its group through Harbor's ``load_trajectory``. Each
-        proposal is still one charged start with one submission from the
-        controller's chosen parent. It needs ``k`` of at least 2 and an agent
-        that loads ATIF trajectories, such as Claude Code or Codex.
+        ``"continue"``: one researcher session makes up to ``k`` proposals in
+        a row, so it keeps its own conversation: it submits, reads the result,
+        and proposes again. ``"all"`` sets no limit of its own. After each
+        submission ARI puts a fresh copy of the selected candidate in the
+        workspace and updates ``/history``. The session ends early when a
+        budget runs out, and the next start is a fresh conversation. It works
+        with any agent, needs ``k`` of at least 2, and counts one researcher
+        start for the whole session, so give the agent a time limit that
+        covers ``k`` rounds of review and evaluation.
     ``log``
         ``True`` adds ``/history/log.md``, a research log ARI writes from its
         own records before each start: every visible candidate's parent,
@@ -84,7 +85,7 @@ class Memory:
         if self.conversation_mode not in _CONVERSATION_MODES:
             raise ValueError('Memory conversation_mode is "files" or "continue"')
         if self.conversation_mode == "continue" and self.conversations in (0, 1):
-            raise ValueError('A conversation continues for 2 or more proposals, or "all": set conversations')
+            raise ValueError('A session continues for 2 or more proposals, or "all": set conversations')
         if type(self.log) is not bool:
             raise ValueError("Memory log is True or False")
         if self.summarize is not None and not callable(self.summarize):
@@ -191,8 +192,8 @@ class Start:
     ``visible`` lists the candidates shown under ``/history/``; ``None`` means
     every candidate. ``preloaded`` says whether ``/history/preloaded/`` exists,
     and ``conversations`` names the earlier starts whose conversations are
-    mounted as files or, in ``"continue"`` mode, the one start whose
-    conversation is loaded.
+    mounted as files. ``submissions`` is how many candidates this session may
+    record: one, a larger number, or ``None`` for no limit of its own.
     """
 
     number: int
@@ -204,11 +205,7 @@ class Start:
     conversation_mode: str = "files"
     log: bool = False
     summary: bool = False
-
-    @property
-    def continues(self) -> bool:
-        """Whether this start continues an earlier conversation rather than beginning one."""
-        return self.conversation_mode == "continue" and bool(self.conversations)
+    submissions: int | None = 1
 
 
 Presenter = Callable[[ResearcherInputs, Start], str]

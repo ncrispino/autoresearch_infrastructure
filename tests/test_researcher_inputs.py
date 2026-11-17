@@ -9,6 +9,7 @@ import pytest
 from autoresearch_infrastructure import launch
 from autoresearch_infrastructure.inputs import Environment, Memory, ResearcherInputs, Start, present
 from autoresearch_infrastructure.instructions import Instructions
+from autoresearch_infrastructure.search import _ONE_SUBMISSION as ONE_SUBMISSION
 from autoresearch_infrastructure.search import RESEARCHER_PROTOCOL
 
 pytest.importorskip("harbor")
@@ -63,13 +64,12 @@ def fixture_agent(monkeypatch, *, fail_on=()):
         def __init__(self, *, agent, image=None, environment=None):
             self.image, self.environment = image, environment
 
-        def run(self, prompt, *, workspace, evidence, readonly, recorder, jobs_root, load_trajectory=None):
+        def run(self, prompt, *, workspace, evidence, readonly, recorder, jobs_root):
             history = next(path for path, target in readonly.items() if target == "/history")
             files = sorted(p.relative_to(history).as_posix() for p in Path(history).rglob("*") if p.is_file())
             seen.append(SimpleNamespace(
                 prompt=prompt, files=files, index=json.loads((Path(history) / "index.json").read_text()),
                 workspace=sorted(p.relative_to(workspace).as_posix() for p in workspace.rglob("*")),
-                load=load_trajectory and json.loads(Path(load_trajectory).read_text()),
                 image=self.image, environment=self.environment,
             ))
             evidence.mkdir(parents=True)
@@ -110,7 +110,9 @@ def test_default_inputs_keep_the_standard_prompt_and_record_each_start(example, 
     assert plan["reviewer_image"] == IMAGE and plan["review_environment"] is None
     standard = plan["instructions"].rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(
         parent_id="candidate-0001", repeats=1, memory_rows="",
-        parent_evidence="Read its evidence at `/history/candidates/candidate-0001/` before editing.")
+        parent_evidence="Read its evidence at `/history/candidates/candidate-0001/` before editing.",
+        after_recording=ONE_SUBMISSION)
+    assert "Stop\n  there, even if it is invalid" in standard and "$" not in standard
     assert seen[0].prompt == standard
     assert "candidates/candidate-0001/snapshot/value.json" in seen[0].files
     records = inputs_records(example.output)
@@ -169,39 +171,104 @@ def test_conversation_window_includes_failed_starts_in_time_order(example, monke
     assert inputs_records(example.output)[3]["conversations"][0]["invocation"] in conversations[3][0]
 
 
-def test_a_conversation_continues_for_k_proposals_then_a_fresh_one_begins(example, monkeypatch):
-    seen = fixture_agent(monkeypatch, fail_on=(5,))
-    seven = f"reviewer = false\n[limits]\ncandidates = 8\nevaluations = 8\n[researcher]\n{AGENT}"
-    run(example.make('memory=ari.Memory(conversations=3, conversation_mode="continue"),', settings=seven),
-        example.output)
-    # Starts 1-3 share a conversation, 4-6 the next, 7 begins a third. Each continuing start loads
-    # what the latest earlier start of its group saved, including a failed start's conversation.
-    assert [s.load for s in seen] == [None, {"start": 1}, {"start": 2}, None, {"start": 4}, {"start": 5}, None]
-    assert not any(f.startswith("conversations/") for s in seen for f in s.files)
-    assert "continues your earlier conversation" in seen[1].prompt
-    assert "continues your earlier conversation" not in seen[3].prompt
-    assert "candidates/candidate-0001/snapshot/value.json" in seen[1].files  # the canonical history
+def session_agent(monkeypatch, rounds, *, crash_after=None):
+    """One session keeps submitting, as an agent loop would, until the reply's `next` is null."""
+    sessions = []
+
+    class SessionAgent:
+        def __init__(self, *, agent, image=None, environment=None):
+            pass
+
+        def run(self, prompt, *, workspace, evidence, readonly, recorder, jobs_root):
+            history = Path(next(path for path, target in readonly.items() if target == "/history"))
+            session = {"prompt": prompt, "replies": [], "starting_values": [], "history": []}
+            sessions.append(session)
+            evidence.mkdir(parents=True)
+            (evidence / "trajectory.json").write_text(json.dumps({"session": len(sessions)}))
+            for value in rounds[len(sessions) - 1]:
+                session["starting_values"].append(json.loads((workspace / "candidate/value.json").read_text()))
+                session["history"].append([c["id"] for c in json.loads(
+                    (history / "index.json").read_text())["candidates"]])
+                (workspace / "candidate/value.json").write_text(json.dumps(value))
+                reply = recorder.dispatch_record_candidate("research", {
+                    "candidate": "workspace", "proposal": {"hypothesis": f"Try {value}", "mechanism": "Next"},
+                })
+                session["replies"].append(reply)
+                if crash_after == len(session["replies"]):
+                    raise RuntimeError("fixture crash mid-session")
+                if reply["next"] is None:
+                    break
+
+    monkeypatch.setattr("autoresearch_infrastructure.coding_agent.CodingAgent", SessionAgent)
+    return sessions
+
+
+def limits(candidates, evaluations=None):
+    return (f"reviewer = false\n[limits]\ncandidates = {candidates}\nevaluations = {evaluations or candidates}\n"
+            f"[researcher]\n{AGENT}")
+
+
+def test_one_session_makes_k_proposals_then_a_fresh_session_begins(example, monkeypatch):
+    # Values: 4 is selected, 2 is worse so the workspace returns to 4, then 6 is selected.
+    sessions = session_agent(monkeypatch, [[4, 2, 6, 99], [8, 9, 99]])
+    summary, opened = run(example.make('memory=ari.Memory(conversations=3, conversation_mode="continue"),',
+                                       settings=limits(6)), example.output)
+    assert summary["status"] == "completed" and len(sessions) == 2
+    first, second = sessions
+    assert "you may record up to 3 candidates" in first["prompt"] and "Read `next`" in first["prompt"]
+    assert first["starting_values"] == [0, 4, 4]  # reset to the selected candidate, not the last submission
+    assert [r["next"] and r["next"]["parent_id"] for r in first["replies"]] == [
+        "candidate-0002", "candidate-0002", None]
+    assert first["replies"][0]["next"]["remaining"] == 2
+    assert first["replies"][2]["stopped"] == "this session's candidates are used"
+    # /history is live: the session sees its own earlier candidates after each submission.
+    assert first["history"][2] == ["candidate-0001", "candidate-0002", "candidate-0003"]
+    # The second session is fresh, starts from the best candidate, and stops when the budget does.
+    assert second["starting_values"] == [6, 8] and second["replies"][1]["next"] is None
+    assert second["replies"][1]["stopped"] == "candidate limit reached"
+    assert summary["starts"] == {"researcher": 2} and len(summary["candidates"]) == 6
+    assert summary["proposals"][0]["candidates"] == ["candidate-0002", "candidate-0003", "candidate-0004"]
     records = inputs_records(example.output)
-    assert records[3]["conversations"] == [] and records[1]["load_trajectory"]
-    assert records[1]["history"]["view"] == "canonical"
+    assert [s["next_parent_id"] for s in records[0]["submissions"]] == ["candidate-0002", "candidate-0002", None]
+    with pytest.raises(ValueError, match="2 or more"):
+        Memory(conversations=1, conversation_mode="continue")
 
 
-def test_all_never_begins_a_fresh_conversation(example, monkeypatch):
-    seen = fixture_agent(monkeypatch)
-    run(example.make('memory=ari.Memory(conversations="all", conversation_mode="continue"),'), example.output)
-    assert [s.load for s in seen] == [None, {"start": 1}, {"start": 2}]
+def test_all_lets_one_session_use_the_whole_budget_and_a_filtered_history_is_refreshed(example, monkeypatch):
+    sessions = session_agent(monkeypatch, [[4, 6, 8, 99]])
+    summary, opened = run(example.make(
+        'memory=ari.Memory(history=1, log=True, conversations="all", conversation_mode="continue"),',
+        settings=limits(4)), example.output)
+    assert len(sessions) == 1 and summary["starts"] == {"researcher": 1}
+    assert "as many candidates as the run's budget allows" in sessions[0]["prompt"]
+    assert sessions[0]["history"] == [["candidate-0001"], ["candidate-0002"], ["candidate-0003"]]
+    assert sessions[0]["replies"][-1]["stopped"] == "candidate limit reached"
 
 
-def test_continuing_needs_two_or_more_proposals_and_an_agent_that_loads_conversations(example):
-    for count in (0, 1):
-        with pytest.raises(ValueError, match="2 or more"):
-            Memory(conversations=count, conversation_mode="continue")
-    terminus = ('reviewer = false\n[limits]\ncandidates = 3\n[researcher]\nname = "terminus-2"\n'
-                'model_name = "openai/fixture"\n')
-    directory = example.make('memory=ari.Memory(conversations=2, conversation_mode="continue"),', settings=terminus)
-    with pytest.raises(ValueError, match="loads ATIF"):
-        launch.open_run(directory, directory / "run.toml", example.output, IMAGE)
-    assert not example.output.exists()
+def test_a_session_that_crashes_keeps_its_candidates_and_the_next_start_is_fresh(example, monkeypatch):
+    session_agent(monkeypatch, [[4, 5], [6, 7, 99]], crash_after=2)
+    summary, opened = run(example.make('memory=ari.Memory(conversations=3, conversation_mode="continue"),',
+                                       settings=limits(5)), example.output)
+    assert summary["status"] == "completed" and summary["proposals"][0]["status"] == "failed"
+    assert summary["proposals"][0]["candidates"] == ["candidate-0002", "candidate-0003"]
+    assert len(summary["candidates"]) == 5 and summary["starts"] == {"researcher": 2}
+
+
+def test_a_session_cannot_submit_after_it_is_told_to_stop(example, monkeypatch):
+    from autoresearch_infrastructure.search import SubmissionRecorder
+
+    class Research:
+        def dispatch_record_candidate(self, session, arguments):
+            return {"candidate_id": "candidate-0002"}
+
+    def stop():
+        raise StopIteration("candidate limit reached")
+
+    recorder = SubmissionRecorder(Research(), "candidate-0001", 1, limit=None, advance=stop)
+    arguments = {"candidate": "workspace", "proposal": {"hypothesis": "h", "mechanism": "m"}}
+    assert recorder.dispatch_record_candidate("research", arguments)["next"] is None
+    with pytest.raises(ValueError, match="no more candidates"):
+        recorder.dispatch_record_candidate("research", arguments)
 
 
 def test_workspace_reset_removes_files_outside_the_candidate(example, monkeypatch):

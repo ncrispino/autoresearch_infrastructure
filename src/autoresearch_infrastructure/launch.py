@@ -28,7 +28,7 @@ from .instructions import task_facts
 from .ledger import StartLedger
 from .persistence import digest, write_json
 from .research import BASELINE, Research
-from .search import RESEARCHER_PROTOCOL, propose, researcher_starts
+from .search import RESEARCHER_PROTOCOL, propose, researcher_starts, reset_candidate
 from .source_tree import python_tree_hash, snapshot, task_context_digest
 from .task import Run, RunSettings, Task, load_task
 
@@ -232,14 +232,6 @@ class _Opening:
             task.objective, sorted(snapshot(Path(task.seed))), cases=len(task.cases), repeats=settings.repeats,
         ), environment=task.environment, memory=task.memory)
         inputs = _transform(original, task.transforms)
-        if task.memory.conversation_mode == "continue" and settings.researcher is not None:
-            from harbor.models.trial.config import AgentConfig
-
-            from .coding_agent import loads_atif
-
-            if not loads_atif(AgentConfig.model_validate(settings.researcher)):
-                raise ValueError('Memory conversation_mode="continue" needs a researcher agent that loads ATIF '
-                                 'trajectories, such as Claude Code or Codex; use "files" with this agent')
         if settings.reviewer is not None and not inputs.rules:
             raise ValueError("Review is on but the instructions list no rules. Add rules, or write reviewer = false")
         replay = _replay_plan(self.replayed, Path(task.seed), settings) if self.replayed else None
@@ -541,7 +533,7 @@ def run_researchers(run: OpenRun) -> dict:
     """Measure the baseline, then let researchers propose until a budget runs out.
 
     Each researcher starts from the selected candidate and may submit one new
-    candidate. Rerunning the command continues with whatever budget is left.
+    candidate, or several in one session when the task's memory says so. Rerunning the command continues with whatever budget is left.
     """
     settings, research, ledger = run.settings, run.research, run.ledger
     if settings.researcher is None:
@@ -566,18 +558,34 @@ def run_researchers(run: OpenRun) -> dict:
             raise RuntimeError("The baseline is not valid and fully measured, so no researcher was started")
         while (stopped := _exhausted(run, panel)) is None:
             parent = research.selected or BASELINE
-            start, history, load, manifest = memory_views.prepare(
-                research, inputs.memory, number=len(researcher_starts(research)) + 1, parent_id=parent,
-                repeats=repeats, preloaded=run.preloaded, view=research.root / "agent/view",
-            )
+            number = len(researcher_starts(research)) + 1
+
+            def view(parent_id):
+                return memory_views.prepare(
+                    research, inputs.memory, number=number, parent_id=parent_id, repeats=repeats,
+                    preloaded=run.preloaded, view=research.root / "agent/view",
+                )
+
+            def advance():
+                """After a submission in a continuing session: the next parent, or why there is none."""
+                blocked = _exhausted(run, panel, starting=False)
+                if blocked is not None:
+                    raise StopIteration(blocked)
+                following = research.selected or BASELINE
+                reset_candidate(research, following)
+                view(following)  # refreshes a filtered /history in place
+                return following
+
+            start, history, manifest = view(parent)
             try:
                 prompt = present_start(inputs, start)
                 if not isinstance(prompt, str) or not prompt.strip():
                     raise ValueError("A presenter must return the prompt text")
                 proposals.append({"parent_id": parent, **propose(
                     research, agent, prompt, parent_id=parent, repeats=repeats, ledger=ledger,
-                    context=run.context, history=history, load_trajectory=load,
+                    context=run.context, history=history,
                     retain=inputs.environment.workspace == "keep",
+                    submissions=start.submissions, advance=advance,
                     record={**manifest, "presenter": run.presenter_identity,
                             "environment": run.environment.prepared() if run.environment else None},
                 )})
@@ -594,10 +602,14 @@ def run_researchers(run: OpenRun) -> dict:
     return run.save(summary)
 
 
-def _exhausted(run: OpenRun, panel: int) -> str | None:
-    """Name the budget that prevents another proposal, or None when one more fits."""
+def _exhausted(run: OpenRun, panel: int, starting: bool = True) -> str | None:
+    """Name the budget that prevents another proposal, or None when one more fits.
+
+    ``starting=False`` asks about another proposal within a session that is
+    already running, which needs no further researcher start.
+    """
     research, ledger = run.research, run.ledger
-    if ledger.remaining("researcher") < 1:
+    if starting and ledger.remaining("researcher") < 1:
         return "researcher starts used"
     if research.proposals >= run.settings.limits.max_candidates:
         return "candidate limit reached"

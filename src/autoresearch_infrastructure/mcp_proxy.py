@@ -61,6 +61,7 @@ def _feedback(value: dict) -> dict:
         return value
     result = {key: value[key] for key in (
         "candidate_id", "status", "source_hash", "contract_hash", "selected", "remaining_evaluations",
+        "next", "stopped",  # whether this session may submit again, and from which candidate
     ) if key in value}
     if "error" in value:
         result["error"] = value["error"]

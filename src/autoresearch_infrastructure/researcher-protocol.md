@@ -45,9 +45,7 @@ The controller already knows your starting version and runs $repeats repeat(s)
 per case. It saves your files, checks validity and runs the evaluation. Wait
 for the reply; it can take several minutes.
 
-- A reply containing `candidate_id` means your candidate was recorded. Stop
-  there, even if it is invalid, its evaluation failed, or its score is poor.
-  This attempt allows one submission.
+$after_recording
 - If the request was rejected before recording, fix the request and retry.
 - If the connection breaks after you send the request, stop. The controller may
   still be evaluating your candidate, so do not send it again.

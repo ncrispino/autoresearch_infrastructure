@@ -80,7 +80,7 @@ The [reference](../../reference.md#researcher-inputs) describes each.
 
 | `Task` part | Use it when the user wants |
 | --- | --- |
-| `memory=ari.Memory(...)` | Researchers to see fewer earlier candidates (`history`), records from an earlier run (`preload`), earlier researchers' conversations as files, or one conversation that continues across several proposals (`conversations`, `conversation_mode`), or a research log or summary (`log`, `summarize`). By default each researcher is a fresh conversation that sees every earlier candidate. |
+| `memory=ari.Memory(...)` | Researchers to see fewer earlier candidates (`history`), records from an earlier run (`preload`), earlier researchers' conversations as files, or one researcher session that makes several proposals in a row (`conversations`, `conversation_mode`; raise the researcher's time limit to fit), or a research log or summary (`log`, `summarize`). By default each researcher is a fresh conversation that sees every earlier candidate. |
 | `environment=ari.Environment(...)` | The researcher to run in a Harbor environment with its own Dockerfile or services (`harbor`), or to start with no files left by earlier researchers (`workspace="reset"`). |
 | `review_environment` | The reviewer to run in its own Harbor environment. |
 | `transforms=[...]` | A study that changes what the researcher is told, such as `ari.transforms.omit_rule(2)`. The reviewer judges the changed rules; the plan keeps the original text. |

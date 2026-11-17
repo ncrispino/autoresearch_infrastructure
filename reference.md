@@ -836,7 +836,8 @@ verified integrations.
 `ari run` is built from two pieces that you can call yourself.
 `ari.CodingAgent(agent=..., image=...)` runs one Harbor agent as a researcher.
 `search.propose` uses one `researcher` start, resets the workspace to the parent
-candidate, runs the agent and accepts at most one submission.
+candidate, runs the agent and accepts one submission, or several with
+`submissions=`.
 
 ```python
 from autoresearch_infrastructure.search import propose, researcher_prompt
@@ -876,8 +877,8 @@ MCP server named `autoresearch`. A terminal agent can run
 needs a `proposal` with a `hypothesis` and a `mechanism`. The controller fixes the
 parent and the repeat count.
 
-Every proposal starts a new agent, whether the previous candidate was valid,
-invalid or never submitted. By default no conversation carries over, and a
+By default every proposal starts a new agent, whether the previous candidate
+was valid, invalid or never submitted. No conversation carries over, and a
 researcher learns from earlier work only through:
 
 - its parent's files, copied into `/workspace/candidate/`;
@@ -921,20 +922,29 @@ ari.Task(..., memory=ari.Memory(history=3, conversations=2))
 | `history` | `"all"` (default), `"none"`, or `n` | Which earlier candidates appear under `/history`: all, none, or the `n` most recently recorded. |
 | `preload` | A directory | Earlier experiment records, such as another run's `history/`, shown under `/history/preloaded/`. They are copied into the run and sealed in the plan. They never become candidates, results or spent budget. |
 | `conversations` | `0` (default), `k`, or `"all"` | How much of earlier researcher conversations carries over. What `k` counts depends on `conversation_mode`. Starts are counted in time order, including failed starts and starts whose candidate was not selected. |
-| `conversation_mode` | `"files"` (default) or `"continue"` | `"files"`: every start is a fresh conversation that can read the conversations of the last `k` starts that saved one, as ATIF JSON under `/history/conversations/`. `"continue"`: one conversation continues for `k` proposals, then a fresh one begins. See below. |
+| `conversation_mode` | `"files"` (default) or `"continue"` | `"files"`: every start is a fresh conversation that can read the conversations of the last `k` starts that saved one, as ATIF JSON under `/history/conversations/`. `"continue"`: one researcher session makes up to `k` proposals in a row, keeping its own conversation. See below. |
 | `log` | `False` (default) or `True` | Adds `/history/log.md`, a research log ARI writes from its own records before each start: every visible candidate's parent, hypothesis, mechanism, verdict and score. |
 | `summarize` | A function `(index) -> str` | Shown as `/history/summary.md`. It receives the visible `/history/index.json` content. It is trusted code: its identity goes into the plan and its output's hash into each start's record. |
 
-With `conversation_mode="continue"` and `conversations=3`, starts 1 to 3 share
-one conversation, starts 4 to 6 the next, and start 7 begins a third. `"all"`
-never begins a fresh one. A continuing start loads the conversation saved by
-the latest earlier start of its group through Harbor's `load_trajectory`, and
-its prompt says that the workspace was reset to the current parent. Each
-proposal is still one charged start with one submission from the parent the
-controller chose. It needs `k` of at least 2 and a researcher agent that loads
-ATIF trajectories, such as Claude Code or Codex; `ari check` refuses other
-agents. Nothing shortens a long conversation, so `"all"` can outgrow a model's
-context on a long run.
+With `conversation_mode="continue"` and `conversations=3`, one researcher
+session submits a candidate, reads the result, and proposes again, up to three
+times. Then the next start is a fresh conversation. `"all"` sets no limit of
+its own, so one session can use the whole budget. This works with any agent.
+
+- After each submission, ARI puts a fresh copy of the selected candidate in
+  `/workspace/candidate/` and updates `/history`. The selected candidate is the
+  best so far, which may not be the one just submitted.
+- The reply to `record_candidate` has a `next` field. It names the `parent_id`
+  the session now starts from, or is null with the reason in `stopped`: the
+  session's candidates are used, or a budget ran out.
+- One session is one `researcher` start, however many candidates it records.
+  The candidate, evaluation and reviewer limits still apply to each candidate.
+- The agent's time limit covers the whole session, including the wait for each
+  review and evaluation, so raise `override_timeout_sec` to fit `k` rounds.
+- If a session fails partway, the candidates it recorded stay, and the next
+  start is a fresh conversation.
+- Nothing shortens a long conversation, so `"all"` can outgrow a model's
+  context on a long run.
 
 With the default memory, a start mounts the canonical history. Any other policy
 builds a separate view for that start, so a hidden record is not reachable
@@ -1040,7 +1050,7 @@ changes. Every start saves, under `agent/inputs/<invocation>/`:
 | Building and recording images | Now: `ari prepare` | Actual main and sidecar image identities, reused by every start |
 | Which earlier candidates are visible | Now: `memory.history` | Separate per-start views over trusted evidence |
 | Preloaded records | Now: `memory.preload` | Sealed copies that never count as evidence |
-| Earlier researcher conversations | Now: `memory.conversations`, `memory.conversation_mode` | Which starts' conversations are read as files, or how many proposals one conversation continues for; loading is Harbor's `load_trajectory` |
+| Earlier researcher conversations | Now: `memory.conversations`, `memory.conversation_mode` | Which starts' conversations are read as files, or how many proposals one session makes in a row |
 | Research log and summaries | Now: `memory.log`, `memory.summarize` | Written from trusted records; summaries recorded |
 | Reviewer environment | Now: `--reviewer-image`, `review_environment` | Independent of the researcher's |
 | Continuing a finished run | Now: `ari extend` | Verified import, cumulative budgets, lineage |

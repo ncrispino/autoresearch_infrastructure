@@ -51,9 +51,7 @@ class CodingAgent:
         recorder=None,
         role="researcher",
         jobs_root: Path | None = None,
-        load_trajectory: Path | None = None,
     ):
-        """Run one start. ``load_trajectory`` is an ATIF conversation for the agent to continue."""
         if recorder is None:
             raise ValueError("A researcher requires a candidate recorder")
         if not callable(getattr(recorder, "dispatch_record_candidate", None)):
@@ -61,14 +59,8 @@ class CodingAgent:
         workspace, evidence = Path(workspace), Path(evidence)
         workspace.mkdir(parents=True, exist_ok=True)
         evidence.mkdir(parents=True, exist_ok=False)
-        agent = self.agent
-        if load_trajectory is not None:
-            if not loads_atif(agent):
-                raise ValueError("Continuing a conversation needs an agent that loads ATIF trajectories")
-            agent = agent.model_copy(deep=True)
-            agent.load_trajectory = str(Path(load_trajectory).resolve())
         trial = run_filesystem_agent(
-            agent=agent, image=self.image, environment=self.environment, instruction=prompt,
+            agent=self.agent, image=self.image, environment=self.environment, instruction=prompt,
             workspace=workspace, evidence=evidence, readonly=readonly or {}, recorder=recorder,
             role=role, jobs_root=jobs_root or evidence / "harbor-jobs",
         )
@@ -79,9 +71,3 @@ class CodingAgent:
             raise RuntimeError("Native Harbor researcher did not retain its ATIF trajectory")
         return json.loads(metadata.read_text())
 
-
-def loads_atif(agent) -> bool:
-    """Whether a Harbor agent configuration can continue a saved ATIF conversation."""
-    from harbor.agents.factory import AgentFactory
-
-    return bool(AgentFactory.get_agent_class_from_config(agent).capabilities.load_atif_trajectory)

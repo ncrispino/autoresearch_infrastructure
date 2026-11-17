@@ -203,7 +203,8 @@ only through the parent candidate's files in `/workspace/candidate/`, through
 candidate with its proposal notes (hypothesis and mechanism), diff, review,
 scores and evaluation trajectories. Earlier researchers' own conversations are
 not included. A task can change all of this with `ari.Memory` (fewer candidates,
-preloaded records, carried conversations) and `ari.Environment` (a Harbor
+preloaded records, earlier conversations, or one session that makes several
+proposals) and `ari.Environment` (a Harbor
 environment definition, or a workspace reset between starts); see
 [Researcher inputs](reference.md#researcher-inputs).
 

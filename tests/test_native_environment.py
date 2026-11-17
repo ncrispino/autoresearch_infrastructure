@@ -151,18 +151,6 @@ def test_researcher_runs_in_a_prepared_harbor_environment_with_memory_and_retain
     assert more["starts"] == {"researcher": 3}
     assert containers() == before
 
-    # A conversation ARI carries is a trajectory Harbor's own loader accepts for native continuation.
-    from harbor.agents.factory import AgentFactory
-    from harbor.models.trial.config import AgentConfig
-
-    log = json.loads((root / "agent/researcher-starts.json").read_text())["starts"]
-    saved = root / log[0]["trajectory"]
-    # Harbor's trial passes load_trajectory to the agent this way when it starts one.
-    agent = AgentFactory.create_agent_from_config(
-        AgentConfig(name="claude-code", model_name="anthropic/fixture", load_trajectory=str(saved)),
-        logs_dir=tmp_path / "logs", load_trajectory=str(saved))
-    assert agent._atif_load_trajectory is not None and agent._atif_load_trajectory.steps
-
 
 def test_prepare_builds_a_dockerfile_and_records_the_image_it_built(tmp_path):
     directory = tmp_path / "env-task"
@@ -243,3 +231,76 @@ p.write_text(json.dumps(v))
     assert recorded["status"] == "valid", recorded
     assert json.loads((tmp_path / "prepared.json").read_text())["sidecars"] == {"cache": SIDECAR}
     assert containers() == before
+
+
+CONTINUE_SCRIPT = '''import json, os, subprocess
+from pathlib import Path
+os.chdir('/workspace/candidate')  # the working directory must survive the reset between proposals
+def submit(value):
+    Path('value.json').write_text(json.dumps(value))
+    Path('/tmp/proposal.json').write_text(json.dumps({'candidate': 'workspace',
+        'proposal': {'hypothesis': f'try {value}', 'mechanism': 'fixture'}}))
+    out = subprocess.run(['python', '/opt/autoresearch/mcp_proxy.py', '--call', '/tmp/proposal.json'],
+                         capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
+first = submit(8)
+assert first['next']['parent_id'] == 'candidate-0002', first
+second = submit(3)  # worse, so the workspace goes back to candidate-0002
+assert second['next']['parent_id'] == 'candidate-0002', second
+assert json.loads(Path('value.json').read_text()) == 8, 'the workspace was not reset to the selected candidate'
+assert 'candidate-0003' in Path('/history/index.json').read_text(), '/history was not updated'
+third = submit(9)
+assert third['next'] is None and third['stopped'], third
+Path('/workspace/session-ok').write_text('ok')
+'''
+
+
+def test_one_real_session_makes_several_proposals(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    import litellm
+    from harbor.llms.base import LLMResponse
+    from harbor.llms.lite_llm import LiteLLM
+    from harbor.models.metric import UsageInfo
+
+    image = os.environ["ARI_REVIEW_FIXTURE_IMAGE"]
+    monkeypatch.setenv("OPENROUTER_API_KEY", "local-fixture-not-a-provider-credential")
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("The native session fixture must not call a provider")
+
+    monkeypatch.setattr(litellm, "acompletion", forbidden)
+    prompts = []
+
+    async def respond(self, prompt, **kwargs):
+        first = "## Objective" in prompt
+        if first:
+            prompts.append(prompt)
+        commands = [{"keystrokes": "python -c " + shlex.quote(CONTINUE_SCRIPT) + "\n", "duration": 5.0}] \
+            if first else []
+        return LLMResponse(
+            content=json.dumps({"analysis": "Local fixture", "plan": "Propose repeatedly",
+                                "commands": commands, "task_complete": not first}),
+            usage=UsageInfo(prompt_tokens=1, completion_tokens=1, cache_tokens=0, cost_usd=0),
+        )
+
+    monkeypatch.setattr(LiteLLM, "call", respond)
+    directory = tmp_path / "task"
+    (directory / "seed").mkdir(parents=True)
+    (directory / "seed/value.json").write_text("0")
+    (directory / "task.py").write_text(
+        TASK.replace('environment=ari.Environment(harbor="env-task"),', "")
+        .replace("memory=ari.Memory(conversations=1, log=True)",
+                 'memory=ari.Memory(conversations=3, conversation_mode="continue")'))
+    (directory / "run.toml").write_text(
+        'reviewer = false\n[limits]\ncandidates = 4\nevaluations = 4\n[researcher]\nname = "terminus-2"\n'
+        'model_name = "openrouter/openai/gpt-6-luna"\noverride_timeout_sec = 120\n'
+        'override_setup_timeout_sec = 120\nkwargs = { record_terminal_session = false }\n')
+    opened = launch.open_run(directory, directory / "run.toml", tmp_path / "run", image)
+    with opened.research:
+        summary = launch.run_researchers(opened)
+    assert summary["status"] == "completed", summary.get("error")
+    assert len(prompts) == 1 and "you may record up to 3 candidates" in prompts[0]
+    assert (tmp_path / "run/research/sessions/research/workspace/session-ok").is_file()
+    assert [row["metrics"] for row in summary["candidates"]] == [
+        {"error": 10}, {"error": 2}, {"error": 7}, {"error": 1}]
+    assert summary["starts"] == {"researcher": 1} and summary["selected"] == "candidate-0004"

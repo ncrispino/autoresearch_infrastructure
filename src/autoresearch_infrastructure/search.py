@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .coding_agent import native_agent_cost
 from .persistence import write_json
-from .source_tree import task_context_digest
+from .source_tree import snapshot, task_context_digest
 
 RESEARCHER_PROTOCOL = Template(Path(__file__).with_name("researcher-protocol.md").read_text())
 
@@ -38,30 +38,59 @@ def researcher_prompt(goal: str, *, parent_id: str, repeats: int, start=None) ->
                      "before each start: every candidate shown, its idea, verdict and score. |")
         if start.summary:
             rows += "\n| `/history/summary.md` | A summary of the candidates shown, written for this run. |"
-        if start.continues:
-            evidence += (f" This start continues your earlier conversation in this run. Your workspace was reset"
-                         f" to a copy of `{parent_id}`, which may differ from the files you last saw.")
         if start.conversations and start.conversation_mode == "files":
             rows += ("\n| `/history/conversations/` | The conversations of earlier researchers in this run, "
                      "as ATIF JSON, oldest first. |")
+    submissions = 1 if start is None else start.submissions
     return goal.rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(
         parent_id=parent_id, repeats=repeats, memory_rows=rows, parent_evidence=evidence,
+        after_recording=_ONE_SUBMISSION if submissions == 1 else _SEVERAL_SUBMISSIONS.format(
+            limit="as many candidates as the run's budget allows" if submissions is None
+            else f"up to {submissions} candidates"),
     )
 
 
-class SingleSubmissionRecorder:
-    """Lets one researcher start record one new candidate from a fixed parent.
+_ONE_SUBMISSION = """\
+- A reply containing `candidate_id` means your candidate was recorded. Stop
+  there, even if it is invalid, its evaluation failed, or its score is poor.
+  This attempt allows one submission."""
+_SEVERAL_SUBMISSIONS = """\
+- A reply containing `candidate_id` means your candidate was recorded, even if
+  it is invalid, its evaluation failed, or its score is poor. In this session
+  you may record {limit}, one at a time.
+- Read `next` in each reply. When it names a `parent_id`, `/workspace/candidate/`
+  now holds a fresh copy of that candidate, which is the best one so far and
+  may not be the one you just submitted. `/history` has been updated. Read the
+  new evidence, edit the files and submit again in the same way.
+- When `next` is null, stop: this session can record no more candidates."""
+
+
+class SubmissionRecorder:
+    """Lets one researcher start record candidates, each from the parent the controller chose.
 
     The controller, not the researcher, chooses the parent and the repeat count.
+    By default a start records one candidate. With ``limit`` above one, or
+    ``None`` for no limit of its own, the same session may record more:
+    after each recording, ``advance()`` either returns the next parent, having
+    put a fresh copy of it in the workspace, or raises ``StopIteration`` with
+    the reason no further candidate fits. The reply's ``next`` tells the
+    researcher which.
     """
 
-    def __init__(self, research, parent_id, repeats):
+    def __init__(self, research, parent_id, repeats, *, limit: int | None = 1, advance=None):
         self.research, self.parent_id, self.repeats = research, parent_id, repeats
-        self.submitted = False
+        self.limit, self.advance = limit, advance
+        self.attempts, self.closed, self.submissions = 0, None, []
+
+    @property
+    def submitted(self) -> bool:
+        return self.attempts > 0
 
     def dispatch_record_candidate(self, session_id, arguments):
-        if self.submitted:
+        if self.limit == 1 and self.attempts:
             raise ValueError("This invocation already submitted its one candidate; stop")
+        if self.closed:
+            raise ValueError(f"This session can record no more candidates ({self.closed}); stop")
         if not isinstance(arguments, dict) or arguments.get("candidate") != "workspace":
             raise ValueError("Submit a new workspace candidate; inspect saved history with native tools")
         if arguments.get("parent_id") not in (None, self.parent_id):
@@ -74,15 +103,50 @@ class SingleSubmissionRecorder:
             for key in ("hypothesis", "mechanism")
         ):
             raise ValueError("Record a nonempty hypothesis and mechanism")
-        self.submitted = True
-        return self.research.dispatch_record_candidate(
+        self.attempts += 1
+        result = self.research.dispatch_record_candidate(
             session_id, {**arguments, "parent_id": self.parent_id, "total_repeats": self.repeats}
         )
+        if self.limit == 1:
+            return result
+        entry = {"candidate_id": result.get("candidate_id"), "parent_id": self.parent_id, "next_parent_id": None}
+        self.submissions.append(entry)
+        if self.limit is not None and self.attempts >= self.limit:
+            self.closed = "this session's candidates are used"
+        else:
+            try:
+                self.parent_id = entry["next_parent_id"] = self.advance()
+            except StopIteration as stop:
+                self.closed = str(stop.value)
+        if self.closed:
+            return {**result, "next": None, "stopped": self.closed}
+        return {**result, "next": {
+            "parent_id": self.parent_id,
+            "remaining": None if self.limit is None else self.limit - self.attempts,
+            "note": f"/workspace/candidate/ now holds a fresh copy of {self.parent_id}. Edit it and submit again.",
+        }}
+
+
+SingleSubmissionRecorder = SubmissionRecorder
+
+
+def reset_candidate(research, parent_id: str) -> None:
+    """Replace the candidate files in place, so a running agent's working directory stays valid."""
+    payload = snapshot(research.candidate_files(parent_id))
+    for child in research.workspace.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    for name, text in payload.items():
+        path = research.workspace / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
 
 
 def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledger, context: Path,
-            history: Path | None = None, record: dict | None = None, load_trajectory: Path | None = None,
-            retain: bool | None = None) -> dict:
+            history: Path | None = None, record: dict | None = None, retain: bool | None = None,
+            submissions: int | None = 1, advance=None) -> dict:
     """Start one researcher on a copy of ``parent_id`` and report what it did.
 
     The start is charged to ``ledger`` before the agent runs and is never
@@ -93,7 +157,9 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
     ``history`` is the directory mounted at ``/history``; the default is the
     experiment's canonical history. ``record`` describes this start's inputs. It
     is saved with the exact prompt under ``agent/inputs/<invocation>/``.
-    ``load_trajectory`` is a conversation for the agent to continue.
+    ``submissions`` is how many candidates this one session may record: one
+    by default, a larger number, or ``None`` for no limit of its own. Beyond
+    one, ``advance()`` is called after each recording; see ``SubmissionRecorder``.
     ``retain`` makes what survives a start explicit. ``None`` leaves files
     outside the candidate as they are. ``True`` clears the workspace, restores
     the files the previous start exported, and after this start exports the
@@ -104,8 +170,8 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
     invocation = uuid4().hex
     evidence = research.root / "agent/invocations" / invocation
     inputs = research.root / "agent/inputs" / invocation
-    recorder = SingleSubmissionRecorder(research, parent_id, repeats)
-    status, error, settled = "failed", None, False
+    recorder = SubmissionRecorder(research, parent_id, repeats, limit=submissions, advance=advance)
+    status, error, settled, record_path = "failed", None, False, inputs / "inputs.json"
     try:
         restored = None
         if retain is not None:
@@ -120,10 +186,8 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
             "parent_id": parent_id,
             "parent_hash": research.candidates[parent_id]["source_hash"],
             "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-            "load_trajectory": _sha256(load_trajectory) if load_trajectory else None,
             "restored": restored,
         })
-        options = {"load_trajectory": load_trajectory} if load_trajectory else {}
         try:
             agent.run(
                 prompt,
@@ -132,7 +196,6 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
                 readonly={context: "/context", (history or research.root / "history"): "/history"},
                 recorder=recorder,
                 jobs_root=research.output / "harbor-jobs",
-                **options,
             )
             status = "completed"
         except Exception as exc:
@@ -145,7 +208,10 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
         ledger.finish(key, status=status, cost_usd=cost)
         _index_trajectory(research, evidence)
         _log_start(research, invocation, evidence, status, _export(research, invocation) if retain else None)
-    return {"status": status, "submitted": recorder.submitted, "error": error, "evidence": str(evidence)}
+        if recorder.submissions and record_path.is_file():
+            write_json(record_path, {**json.loads(record_path.read_text()), "submissions": recorder.submissions})
+    return {"status": status, "submitted": recorder.submitted, "error": error, "evidence": str(evidence),
+            "candidates": [entry["candidate_id"] for entry in recorder.submissions]}
 
 
 def researcher_starts(research) -> list[dict]:
