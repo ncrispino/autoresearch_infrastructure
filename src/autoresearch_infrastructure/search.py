@@ -43,7 +43,16 @@ def researcher_prompt(goal: str, *, parent_id: str, repeats: int, start=None) ->
                      "as ATIF JSON, oldest first. |")
     submissions = 1 if start is None else start.submissions
     context = start is None or start.context
+    also = None if start is None else start.candidate_at
+    candidate_row = (
+        f"| `/workspace/candidate/` | Your editable solution, copied from `{parent_id}`. Only this directory "
+        "is submitted. |\n" if also is None else
+        f"| `{also}/`, also at `/workspace/candidate/` | Your editable solution, copied from `{parent_id}`. "
+        "The two paths are one directory, not two copies: a change at either is a change at both. Work at "
+        f"`{also}/` as the task's text does, keep scratch files out of it, and do not copy between the two "
+        "paths. Only this directory is submitted. |\n")
     return goal.rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(
+        candidate_row=candidate_row,
         parent_id=parent_id, repeats=repeats, memory_rows=rows, parent_evidence=evidence,
         context_row="| `/context/` | Read-only task material. |\n" if context else "",
         readonly="`/context` and `/history` are" if context else "`/history` is",

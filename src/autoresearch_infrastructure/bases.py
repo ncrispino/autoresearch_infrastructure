@@ -107,7 +107,10 @@ def harbor_deliverable(
     ``grader``
         Where the scripts run: by default the task's main image; or a directory
         in the Harbor task holding the grader's own Dockerfile; or an image
-        pinned by digest.
+        pinned by digest. Name the directory even when an image of it is
+        already built, and give that image as ``grader_image = "sha256:..."``
+        under ``[task]`` in the run settings: the directory is then still left
+        out of the agents' container.
 
     ``instruction.md`` is the written objective. ``rules`` and ``environment``
     add the two lists a Harbor instruction does not separate; the reviewer
@@ -152,6 +155,7 @@ def harbor_deliverable(
         task=task, deliverable=deliverable, feedback=feedback, sealed=sealed, grader=grader, state=state,
         rewards=rewards, capabilities=capabilities, network=network, feedback_log=feedback_log,
         feedback_artifacts=feedback_artifacts, seed=run.directory / seed if check_seed else None,
+        task_image=run.settings.task.get("image"), grader_image=run.settings.task.get("grader_image"),
     )
     elsewhere = deliverable.rstrip("/") != _CANDIDATE
     harbor = None
@@ -167,16 +171,17 @@ def harbor_deliverable(
             objective=source.read_text(encoding="utf-8").strip(),
             rules=tuple(rules),
             environment=(
-                *((f"`{deliverable}`, the deliverable directory the text above names, and "
-                   "`/workspace/candidate/` are one directory here, not two copies. Its contents are what "
-                   "is graded, and the grader reads them at the first path.",)
+                *((f"`{deliverable}`, the deliverable directory the text above names, is also mounted at "
+                   "`/workspace/candidate/`. The two paths are one directory, not two copies. Its contents "
+                   f"are what is graded, and the grader reads them at `{deliverable}`.",)
                   if elsewhere else ()),
                 "Submitting is described under the file layout below. It replaces any submission tool, "
                 "time limit or submission count the text above names.",
                 "The grader runs in a separate container that you cannot reach. Its score is returned to you "
                 "after each submission.",
                 *(("You work in the task's main container, so its other paths are as the text above says. "
-                   "Only `/workspace` and `/tmp` are writable.",) if harbor is not None else ()),
+                   + (f"Only `{deliverable}`, `/workspace` and `/tmp` are writable." if elsewhere
+                      else "Only `/workspace` and `/tmp` are writable."),) if harbor is not None else ()),
                 *environment,
             ),
         )

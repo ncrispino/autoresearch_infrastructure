@@ -46,12 +46,13 @@ def main(argv=None):
     command.add_argument("harbor_task", type=Path, help="A Harbor task directory")
     command.add_argument("--deliverable", required=True, help="The container path of the deliverable, such as /app/output")
     command.add_argument("--output", type=Path, required=True, help="A new directory to write the files into")
+    command.add_argument("--image", help="An image ID to read instead of building the task's image")
     args = parser.parse_args(argv)
     if args.command == "extract-seed":
         from .harbor_deliverable import extract_seed
 
         try:
-            result = extract_seed(args.harbor_task, args.deliverable, args.output)
+            result = extract_seed(args.harbor_task, args.deliverable, args.output, image=args.image)
         except (ValueError, RuntimeError, OSError) as error:
             print(f"ari extract-seed: {type(error).__name__}: {error}", file=sys.stderr)
             return 2

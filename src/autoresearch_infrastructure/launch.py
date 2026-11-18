@@ -573,7 +573,8 @@ def run_researchers(run: OpenRun) -> dict:
                 return following
 
             start, history, manifest = view(parent)
-            start = replace(start, context=any(run.context.iterdir()))
+            start = replace(start, context=any(run.context.iterdir()),
+                            candidate_at=run.task.environment.candidate_at)
             try:
                 prompt = present_start(inputs, start)
                 if not isinstance(prompt, str) or not prompt.strip():

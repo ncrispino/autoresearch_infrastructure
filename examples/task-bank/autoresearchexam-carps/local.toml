@@ -1,0 +1,10 @@
+# No agents: grade your own edits with ari record.
+reviewer = false
+
+[limits]
+candidates = 4
+evaluations = 4
+
+# [task]
+# grader_image = "sha256:..."   # a grader image already built from environment/are-grader-ctx
+# image = "sha256:..."          # the task's main image, already built; the seed is checked against it

@@ -113,7 +113,9 @@ def test_default_inputs_keep_the_standard_prompt_and_record_each_start(example, 
         parent_id="candidate-0001", repeats=1, memory_rows="",
         parent_evidence="Read its evidence at `/history/candidates/candidate-0001/` before editing.",
         after_recording=ONE_SUBMISSION,
-        context_row="| `/context/` | Read-only task material. |\n", readonly="`/context` and `/history` are")
+        context_row="| `/context/` | Read-only task material. |\n", readonly="`/context` and `/history` are",
+        candidate_row="| `/workspace/candidate/` | Your editable solution, copied from `candidate-0001`. Only this "
+                      "directory is submitted. |\n")
     assert "Stop\n  there, even if it is invalid" in standard and "$" not in standard
     assert seen[0].mounts == ["/context", "/history"]  # this task passes a context file
     assert seen[0].prompt == standard

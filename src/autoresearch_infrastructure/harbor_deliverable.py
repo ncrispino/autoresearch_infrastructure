@@ -28,6 +28,7 @@ import fnmatch
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -78,9 +79,12 @@ class HarborGraderEvaluator:
         The container path the task's grader reads the deliverable from, such
         as ``/app/output``. The candidate is mounted there read-only.
     ``feedback``
-        The container path of the script whose rewards the researcher sees. The
-        task's ``tests/`` directory is mounted at ``/tests``, so the usual value
-        is a file there, such as ``/tests/feedback.sh``.
+        The container path of the script whose rewards the researcher sees.
+        When the grader runs in the task's main image, the task's ``tests/``
+        directory is mounted at ``/tests``, so the usual value is a file there,
+        such as ``/tests/feedback.sh``. A separate grader image is used as it
+        is, with nothing mounted at ``/tests``: the scripts are paths in that
+        image, and ``prepare`` checks that they exist.
     ``sealed``
         The container path of the script whose rewards stay private, or None
         for a task with no held-out score.
@@ -119,6 +123,18 @@ class HarborGraderEvaluator:
         The starting deliverable to compare with what the task's main image
         ships at ``deliverable``, or None to skip the comparison. ``prepare``
         compares them once and refuses a run whose seed differs.
+    ``grader_image``
+        An image pinned by digest that was built from the ``grader``
+        directory, to use instead of building it. ``grader`` must then name
+        that directory, so that it is still known to be the grader's.
+    ``task_image``
+        An image pinned by digest to read the shipped deliverable from, instead
+        of the task's main image: the task's image with what an agent needs
+        added, as the run settings name it under ``[task] image``.
+
+    The grader container gets the CPUs and memory of the task's
+    ``[environment]``. CPUs are capped at the host's count, and each
+    evaluation records the number used.
 
     Every evaluation gets a new grader container, which is deleted with
     everything it wrote when the script ends. It has no capabilities beyond
@@ -132,7 +148,8 @@ class HarborGraderEvaluator:
     def __init__(self, *, task, deliverable: str, feedback: str, sealed: str | None = None,
                  grader: str | None = None, state: Path, rewards: dict[Metric, str] | None = None,
                  capabilities=(), network: bool = False, feedback_log: bool = False,
-                 feedback_artifacts: bool = False, seed: Path | None = None):
+                 feedback_artifacts: bool = False, seed: Path | None = None,
+                 task_image: str | None = None, grader_image: str | None = None):
         self.task = Path(task).resolve()
         manifest = self.task / "task.toml"
         if not manifest.is_file():
@@ -145,6 +162,8 @@ class HarborGraderEvaluator:
         self.deliverable = _container_path(deliverable, "deliverable")
         if len(self.deliverable.parts) < 2 or self.deliverable.parts[1] in _SYSTEM:
             raise ValueError(f"The deliverable cannot be mounted at {deliverable}")
+        self.separate_grader = grader is not None
+        self.mount_tests = not self.separate_grader and (self.task / "tests").is_dir()
         self.scripts = {"feedback": self._script(feedback, "feedback")}
         if sealed is not None:
             self.scripts["sealed"] = self._script(sealed, "sealed")
@@ -152,8 +171,18 @@ class HarborGraderEvaluator:
                 raise ValueError("The sealed script must differ from the feedback script, or the "
                                  "researcher would be shown the sealed score")
         self.grader, self.context = self._grader(grader)
-        self.separate_grader = grader is not None
+        if grader_image is not None and (self.context is None or not self.separate_grader):
+            raise ValueError("grader_image replaces building the grader's own directory: name that directory as "
+                             "grader, such as grader=\"environment/grader\"")
+        if grader_image is not None and not _PINNED.fullmatch(str(grader_image)):
+            raise ValueError("grader_image must be an image ID or digest (sha256:...)")
+        self.prebuilt = grader_image
         self.seed = None if seed is None else Path(seed).resolve()
+        if task_image is not None and not _PINNED.fullmatch(str(task_image)):
+            raise ValueError("task_image must be an image ID or digest (sha256:...)")
+        self.task_image = task_image
+        requested = self.environment.get("cpus", 1)
+        self.cpus = min(float(requested), float(os.cpu_count() or 1))
         self.timeout = verifier.get("timeout_sec", 600)
         self.env = {**verifier.get("env", {})}
         if any(not isinstance(value, str) or "${" in value for value in self.env.values()):
@@ -177,11 +206,13 @@ class HarborGraderEvaluator:
             "tests": task_context_digest(self.task / "tests") if (self.task / "tests").is_dir() else None,
             "grader": self.grader,
             "context": task_context_digest(self.context) if self.context else None,
+            "prebuilt": self.prebuilt,
         })
 
     def _script(self, value, label: str) -> PurePosixPath:
         path = _container_path(value, label)
-        if _TESTS in path.parents and not (self.task / "tests" / path.relative_to(_TESTS)).is_file():
+        if self.mount_tests and _TESTS in path.parents and not (
+                self.task / "tests" / path.relative_to(_TESTS)).is_file():
             raise ValueError(f"The {label} script {value} is not in the Harbor task's tests/ directory")
         return path
 
@@ -225,7 +256,7 @@ class HarborGraderEvaluator:
                 raise ValueError(f"The grader image {saved['image']} is no longer available; "
                                  "load it again (docker load) or use a fresh output")
             return saved["image"]
-        image, built = _resolve(self.grader, self.context)
+        image, built = _resolve(self.prebuilt, None) if self.prebuilt else _resolve(self.grader, self.context)
         write_json(self.record, {"definition": self.definition, "image": image, "built": built})
         return image
 
@@ -239,13 +270,25 @@ class HarborGraderEvaluator:
         each evaluation, where it costs nothing once the check is recorded.
         """
         image = self.image()
+        saved = json.loads(self.record.read_text())
+        if self.separate_grader and not saved.get("scripts_checked"):
+            missing = [path.as_posix() for path in self.scripts.values() if not _has_file(image, path)]
+            if missing:
+                raise ValueError(f"The grader image has no {', '.join(missing)}. A separate grader image is used "
+                                 "as it is, so name the scripts by their paths inside it")
+            saved = {**saved, "scripts_checked": True}
+            write_json(self.record, saved)
         if self.seed is None:
             return
-        saved = json.loads(self.record.read_text())
         expected = _file_digests(self.seed)
         if saved.get("seed") == digest(expected):
             return
-        main = image if not self.separate_grader else _resolve(*_main_image(self.task, self.environment))[0]
+        if self.task_image is not None:
+            main = self.task_image
+        elif self.separate_grader:
+            main = _resolve(*_main_image(self.task, self.environment))[0]
+        else:
+            main = image
         with tempfile.TemporaryDirectory(prefix="ari-shipped-") as scratch:
             found = shipped(main, self.deliverable, Path(scratch) / "shipped")
             differences = _differences(_file_digests(found) if found else {}, expected)
@@ -267,7 +310,7 @@ class HarborGraderEvaluator:
         command = [
             "create", "--name", name, "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             "--pids-limit", "512", "--init",
-            "--cpus", str(self.environment.get("cpus", 1)),
+            "--cpus", f"{self.cpus:g}",
             "--memory", f"{self.environment.get('memory_mb', 4096)}m",
             "--volume", _LOGS.as_posix(), "--volume", _ARTIFACTS.as_posix(),  # anonymous; removed with the container
             "--env", f"{CASE_VARIABLE}={case}",
@@ -277,7 +320,7 @@ class HarborGraderEvaluator:
             command += ["--network", "none"]
         for capability in self.capabilities:
             command += ["--cap-add", capability]
-        if (self.task / "tests").is_dir():
+        if self.mount_tests:
             command += ["--mount", f"type=bind,source={self.task / 'tests'},target={_TESTS},readonly"]
         for key, value in self.env.items():
             command += ["--env", f"{key}={value}"]
@@ -332,7 +375,8 @@ class HarborGraderEvaluator:
                 sealed = {"error": f"{type(error).__name__}: {error}"}
             write_json(private / SEALED_RECORD, {"candidate_hash": context.candidate_hash, "case": context.task,
                                                  "repeat": context.repeat, **sealed})
-        return Evaluation(metrics, metadata={"feedback_rewards": rewards, "grader_image": self.image()})
+        return Evaluation(metrics, metadata={"feedback_rewards": rewards, "grader_image": self.image(),
+                                             "grader_cpus": self.cpus})
 
 
 def _rewards(logs: Path) -> dict | None:
@@ -399,19 +443,35 @@ def shipped(image: str, path: PurePosixPath, destination: Path) -> Path | None:
     return destination
 
 
-def extract_seed(task: Path, deliverable: str, destination: Path) -> dict:
+def _has_file(image: str, path: PurePosixPath) -> bool:
+    """Whether ``image`` holds a regular file at ``path``. The image is never run."""
+    with tempfile.TemporaryDirectory(prefix="ari-probe-") as scratch:
+        name = "ari-probe-" + uuid4().hex[:12]
+        _docker(["create", "--name", name, "--entrypoint", "sh", image])
+        try:
+            copied = subprocess.run(["docker", "cp", f"{name}:{path}", str(Path(scratch) / "file")],
+                                    capture_output=True)
+        finally:
+            subprocess.run(["docker", "rm", "--force", name], capture_output=True)
+        return copied.returncode == 0 and (Path(scratch) / "file").is_file()
+
+
+def extract_seed(task: Path, deliverable: str, destination: Path, image: str | None = None) -> dict:
     """Write the starting deliverable a Harbor task's image ships at ``deliverable`` into ``destination``.
 
     This is the import step for a task whose starter exists only in its image,
     for example because the Dockerfile generates it. The image is built from
-    ``environment/``, or the pinned ``docker_image`` is used. ``destination``
-    must not exist yet.
+    ``environment/``, or the pinned ``docker_image`` is used; ``image``, an
+    image pinned by digest, is read instead. ``destination`` must not exist yet.
     """
     task, destination = Path(task).resolve(), Path(destination)
     if destination.exists():
         raise ValueError(f"{destination} already exists; name a new directory")
     environment = tomllib.loads((task / "task.toml").read_text(encoding="utf-8")).get("environment") or {}
-    image, _ = _resolve(*_main_image(task, environment))
+    if image is None:
+        image, _ = _resolve(*_main_image(task, environment))
+    elif not _PINNED.fullmatch(str(image)):
+        raise ValueError("--image must be an image ID or digest (sha256:...)")
     with tempfile.TemporaryDirectory(prefix="ari-shipped-") as scratch:
         found = shipped(image, _container_path(deliverable, "deliverable"), Path(scratch) / "shipped")
         destination.parent.mkdir(parents=True, exist_ok=True)

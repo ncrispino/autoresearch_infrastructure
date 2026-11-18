@@ -686,7 +686,7 @@ def task(run):
 | `sealed` | The grader script whose reward is held out. The default is Harbor's `/tests/test.sh`. `None` means the task has no held-out score. |
 | `seed` | The starting deliverable, a directory relative to the task file. The default is `environment/candidate` in the Harbor task, the directory its Dockerfile copies to `deliverable`, so the files exist once. Without that directory it is `seed/` beside the task file. |
 | `check_seed` | `True` (the default) compares the seed with what the task's image holds at `deliverable` before the baseline, and refuses the run if they differ, naming each file. `False` skips this, to start from files of your own. |
-| `grader` | Where the scripts run. The default is the task's main image. A directory in the Harbor task that holds the grader's own Dockerfile, such as `"environment/grader"`, is built instead. An image pinned by digest is used as it is. |
+| `grader` | Where the scripts run. The default is the task's main image, with the task's `tests/` mounted at `/tests`. A directory in the Harbor task that holds the grader's own Dockerfile, such as `"environment/grader"`, is built instead, or an image pinned by digest is used; either is used as it is, with nothing mounted at `/tests`, and the scripts are paths inside it that are checked before the baseline. Name the directory even when its image is already built, and give that image as `grader_image = "sha256:..."` under `[task]`, so that the directory is still left out of the agents' container. |
 | `rules`, `environment` | Lists added to `instruction.md`, which becomes the written objective. Pass `instructions` instead to write all three parts yourself. |
 | `objective`, `rewards` | The default objective is the metric `reward`, higher is better, read from the feedback script's single reward. For other rewards, pass an objective and `rewards={METRIC: "reward_key"}` together. |
 | `validity` | An optional validity function. |
@@ -697,9 +697,9 @@ def task(run):
 | `memory` | An `ari.Memory`, as in `ari.Task`. |
 | `capabilities`, `network`, `feedback_log` | Loosen the grader container: Linux capabilities to keep, the default Docker network, and publishing the feedback script's output to the researcher. All are off by default. |
 
-**The grader.** Each evaluation starts a new container from the grader image,
-mounts the saved candidate read-only at `deliverable` and the Harbor task's
-`tests/` read-only at `/tests`, and runs the feedback script. The script writes
+**The grader.** Each evaluation starts a new container from the grader image, with the task's `[environment]` CPUs and memory; CPUs are capped at the host's count and the number used is recorded with each evaluation. It mounts the saved candidate read-only at `deliverable`, and the Harbor task's
+`tests/` read-only at `/tests` when the grader is the task's main image, then
+runs the feedback script. The script writes
 `/logs/verifier/reward.txt` (one number) or `reward.json` (a mapping), as for
 Harbor's verifier. Then the sealed script runs the same way in a second
 container. Both containers are deleted with everything they wrote. They have no
@@ -752,7 +752,7 @@ whatever the task's image has at the deliverable path, and the grader sees only
 the candidate. Under `harbor run`, by contrast, an agent starts from the
 image's files there. So the seed must be those files, or the run is a
 different task. Before the baseline, ARI copies them out of the image once and
-compares them with the seed, file by file, and refuses the run if they differ.
+compares them with the seed, file by file, and refuses the run if they differ. With `[task] image` set, it reads that image instead of building the task's.
 When importing a task, `ari extract-seed` writes them for you, which matters
 when the Dockerfile generates the starter instead of copying it from the task
 directory:
@@ -760,6 +760,8 @@ directory:
 ```sh
 ari extract-seed my-task/harbor-task --deliverable /app/output --output my-task/seed
 ```
+
+`--image sha256:...` reads an image already built instead of building one.
 
 It drops links and special files, reports the files it wrote, and says when the
 image has nothing at that path or when a file is not UTF-8 text, which a
@@ -784,7 +786,7 @@ as `/app/data`, because `/workspace` holds different things for the researcher
 and for the grader. Review needs at least one rule, which a Harbor instruction
 does not list: pass `rules`, or write `reviewer = false`.
 
-See the [curve-fitting example](examples/curve-fitting/README.md), which has
+[AutoResearchExam subset selection](examples/task-bank/autoresearchexam-carps/TASK.md) is a real benchmark task imported this way, with a grader in its own image and two hidden splits. See the [curve-fitting example](examples/curve-fitting/README.md), which has
 one script and three rewards, and the
 [threshold-deliverable example](examples/threshold-deliverable/README.md), which
 has a sealed split.

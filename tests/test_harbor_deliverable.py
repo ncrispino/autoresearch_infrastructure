@@ -169,6 +169,7 @@ def test_a_configured_researcher_runs_in_the_derived_environment_and_may_take_a_
     pytest.importorskip("harbor")
     run = open_copy(tmp_path, "reviewer = false\n" + RESEARCHER)
     assert run.settings.researcher["override_timeout_sec"] == 86400
+    assert "Only `/workspace` and `/tmp` are writable." in run.inputs.specification()  # the convention: one path
     assert run.image is None and run.environment is not None and run.review_environment is None
     staged = tmp_path / "run/environment"
     assert (staged / "Dockerfile").is_file() and (staged / "train.csv").is_file()
@@ -236,7 +237,8 @@ def test_the_example_is_graded_by_its_own_harbor_grader_in_real_containers(tmp_p
 @docker
 def test_a_grader_built_from_its_own_directory_cannot_change_the_candidate_or_reach_the_network(tmp_path):
     task = harbor_task(tmp_path / "harbor-task", **{
-        "environment/grader/Dockerfile": f"FROM {BASE}\nCOPY hidden.txt /hidden.txt\nCOPY grade.sh /grade.sh\n",
+        # The script lives in the grader image's own /tests, beside a task that has a top-level tests/ too.
+        "environment/grader/Dockerfile": f"FROM {BASE}\nCOPY hidden.txt /hidden.txt\nCOPY grade.sh /tests/grade.sh\n",
         "environment/grader/hidden.txt": "7\n",
         "environment/grader/grade.sh": (
             'touch /app/output/written 2>/dev/null && echo "writable" >&2\n'
@@ -246,11 +248,13 @@ def test_a_grader_built_from_its_own_directory_cannot_change_the_candidate_or_re
             'echo "the hidden value is $(cat /hidden.txt)"\n'),
     })
     matches, length = ari.Metric("matches"), ari.Metric("length", "min")
-    grader = evaluator(tmp_path, task=task, grader="environment/grader", feedback="/grade.sh", sealed=None,
+    grader = evaluator(tmp_path, task=task, grader="environment/grader", feedback="/tests/grade.sh", sealed=None,
                        rewards={matches: "matches", length: "length"})
     candidate = tmp_path / "candidate"
     candidate.mkdir()
     (candidate / "answer.txt").write_text("7\n")
+    grader.prepare()  # the script is found inside the grader image
+    assert json.loads((tmp_path / "state/grader.json").read_text())["scripts_checked"] is True
     assert grader.grade(candidate, "feedback", tmp_path / "evidence") == {"matches": 1, "length": 2}
     assert sorted(path.name for path in candidate.iterdir()) == ["answer.txt"]
     output = (tmp_path / "evidence/output.txt").read_text()
@@ -329,8 +333,8 @@ def imported(tmp_path, call, settings="reviewer = false\n", image=None, **files)
 def test_a_task_from_elsewhere_keeps_its_own_deliverable_path_for_the_grader_and_the_researcher(tmp_path):
     run = imported(tmp_path, "deliverable='/app/output', feedback='/tests/feedback.sh'",
                    **{"seed/answer.txt": "x\n"})
-    assert ("`/app/output`, the deliverable directory the text above names, and `/workspace/candidate/` are one "
-            "directory here") in run.inputs.specification()
+    assert ("`/app/output`, the deliverable directory the text above names, is also mounted at "
+            "`/workspace/candidate/`. The two paths are one directory") in run.inputs.specification()
     assert run.task.evaluator.deliverable.as_posix() == "/app/output"
     assert run.task.environment.candidate_at == "/app/output"
     plan = json.loads((tmp_path / "run/plan.json").read_text())
@@ -530,3 +534,106 @@ def test_extract_seed_copies_a_starter_the_dockerfile_generates_and_the_run_chec
                   tmp_path / "task/local.toml", "--json")
     assert refused.returncode == 2 and "start.txt differs" in refused.stderr
     assert not list((tmp_path / "other").rglob("candidate-0001"))  # opened, but nothing recorded or graded
+
+
+def test_the_file_table_names_the_tasks_own_path_first_when_the_candidate_has_two():
+    from autoresearch_infrastructure.search import researcher_prompt
+
+    plain = researcher_prompt("Goal", parent_id="candidate-0001", repeats=1, start=ari.Start(1, "candidate-0001", 1))
+    both = researcher_prompt("Goal", parent_id="candidate-0001", repeats=1,
+                             start=ari.Start(1, "candidate-0001", 1, candidate_at="/app/output"))
+    assert "| `/workspace/candidate/` | Your editable solution, copied from `candidate-0001`." in plain
+    assert "/app/output" not in plain and "$" not in both
+    row = next(line for line in both.splitlines() if line.startswith("| `/app/output/`"))
+    assert "also at `/workspace/candidate/`" in row and "one directory, not two copies" in row
+    assert "do not copy between the two paths" in row and "keep scratch files out of it" in row
+
+
+def test_an_empty_seed_is_described_as_empty():
+    from autoresearch_infrastructure.instructions import task_facts
+
+    assert task_facts(ari.Metric("reward"), [])[0] == "Starting files: none. The candidate starts empty."
+
+
+def test_a_separate_grader_image_keeps_its_own_tests_directory_and_its_scripts_are_checked_inside_it(
+        tmp_path, monkeypatch):
+    probed = []
+    monkeypatch.setattr(harbor_deliverable, "_has_file", lambda image, path: probed.append(path.as_posix())
+                        or path.as_posix() != "/tests/missing.sh")
+    monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
+    pinned = "sha256:" + "e" * 64
+    # The task has a top-level tests/ without these scripts; the grader image has them in its own /tests.
+    grader = evaluator(tmp_path, grader=pinned, feedback="/tests/intermediate.sh", sealed="/tests/final.sh")
+    assert grader.mount_tests is False
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state/grader.json").write_text(json.dumps({"definition": grader.definition, "image": pinned}))
+    grader.prepare()
+    assert probed == ["/tests/intermediate.sh", "/tests/final.sh"]
+    grader.prepare()  # recorded once
+    assert len(probed) == 2
+    missing = evaluator(tmp_path / "missing", grader=pinned, feedback="/tests/missing.sh", sealed=None)
+    (tmp_path / "missing/state").mkdir(parents=True)
+    (tmp_path / "missing/state/grader.json").write_text(json.dumps({"definition": missing.definition,
+                                                                    "image": pinned}))
+    with pytest.raises(ValueError, match="grader image has no /tests/missing.sh"):
+        missing.prepare()
+    # The task's main image is graded with the task's tests/ mounted, and checked against it at once.
+    assert evaluator(tmp_path / "main").mount_tests is True
+    with pytest.raises(ValueError, match="not in the Harbor task's tests/"):
+        evaluator(tmp_path / "absent", feedback="/tests/intermediate.sh")
+
+
+def test_the_seed_is_read_from_the_agent_ready_image_when_the_settings_name_one(tmp_path, monkeypatch):
+    read = []
+
+    def fake_shipped(image, path, destination):
+        read.append(image)
+        destination.mkdir()
+        return destination
+
+    monkeypatch.setattr(harbor_deliverable, "shipped", fake_shipped)
+    monkeypatch.setattr(harbor_deliverable, "_has_file", lambda image, path: True)
+    monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
+    agents = "sha256:" + "f" * 64
+    (tmp_path / "seed").mkdir()
+    grader = evaluator(tmp_path, grader="sha256:" + "e" * 64, seed=tmp_path / "seed", task_image=agents)
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state/grader.json").write_text(json.dumps({"definition": grader.definition, "image": "x"}))
+    grader.prepare()
+    assert read == [agents]
+    with pytest.raises(ValueError, match="task_image must be an image ID"):
+        evaluator(tmp_path / "tagged", task_image="python:3.13")
+
+
+def test_the_grader_is_given_no_more_cpus_than_the_host_has(tmp_path, monkeypatch):
+    monkeypatch.setattr(harbor_deliverable.os, "cpu_count", lambda: 4)
+    task = harbor_task(tmp_path / "harbor-task", **{"task.toml": '[environment]\ncpus = 8\n'})
+    assert evaluator(tmp_path, task=task).cpus == 4
+    small = harbor_task(tmp_path / "small", **{"task.toml": '[environment]\ncpus = 2\n'})
+    assert evaluator(tmp_path / "s", task=small).cpus == 2
+
+
+def test_a_prebuilt_grader_image_still_leaves_the_graders_directory_out_of_the_agents_container(tmp_path):
+    pytest.importorskip("harbor")
+    files = {"seed/answer.txt": "x\n",
+             "harbor-task/environment/grader/Dockerfile": f"FROM {BASE}\nCOPY hidden.txt /tests/hidden.txt\n",
+             "harbor-task/environment/grader/hidden.txt": "the answers\n"}
+    prebuilt = "sha256:" + "e" * 64
+    settings = ("reviewer = false\n" + RESEARCHER.replace("86400", "600")
+                + f'[task]\ngrader_image = "{prebuilt}"\n')
+    run = imported(tmp_path, "feedback='/tests/feedback.sh', grader='environment/grader', check_seed=False",
+                   settings, **files)
+    assert run.task.evaluator.prebuilt == prebuilt and run.task.evaluator.context.name == "grader"
+    staged = sorted(path.relative_to(tmp_path / "run/environment").as_posix()
+                    for path in (tmp_path / "run/environment").rglob("*") if path.is_file())
+    assert staged == ["Dockerfile", "public.txt"]
+    with pytest.raises(ValueError, match="name that directory as grader"):
+        evaluator(tmp_path / "image-only", grader=prebuilt, grader_image=prebuilt)
+
+
+def test_an_imported_task_tells_the_researcher_its_deliverable_is_writable(tmp_path):
+    pytest.importorskip("harbor")
+    settings = "reviewer = false\n" + RESEARCHER.replace("86400", "600")
+    run = imported(tmp_path, "deliverable='/app/output', feedback='/tests/feedback.sh', check_seed=False", settings,
+                   **{"seed/answer.txt": "x\n"})
+    assert "Only `/app/output`, `/workspace` and `/tmp` are writable." in run.inputs.specification()

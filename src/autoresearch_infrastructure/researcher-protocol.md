@@ -2,8 +2,7 @@
 
 | Path | What is here |
 | --- | --- |
-| `/workspace/candidate/` | Your editable solution, copied from `$parent_id`. Only this directory is submitted. |
-$context_row| `/history/index.json` | Read-only summary of earlier candidates: each idea, its validity verdict, its scores, and which candidate is currently selected. Start here. |
+$candidate_row$context_row| `/history/index.json` | Read-only summary of earlier candidates: each idea, its validity verdict, its scores, and which candidate is currently selected. Start here. |
 | `/history/candidates/<id>/` | One earlier candidate: its files in `snapshot/`, its changes in `diff.patch`, its review in `validity/`, and its results in `evaluations/`. |
 | `/tmp/` | Scratch space. Nothing here is submitted. |$memory_rows
 

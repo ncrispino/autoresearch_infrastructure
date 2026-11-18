@@ -8,6 +8,7 @@ and what was observed.
 | --- | --- | --- | --- |
 | [QuixBugs harness](harbor-harness/TASK.md) | A solver program with its prompts, skills and hooks | The unchanged Harbor task verifier | Run once with live models. The baseline stayed selected. |
 | [SpreadsheetBench Verified](spreadsheet-canary/TASK.md) | The fixed baseline program, then a solver program | The unchanged SpreadsheetBench Verified verifier | Baseline calibrations and harness studies run with live models. No improvement established. |
+| [AutoResearchExam: subset selection](autoresearchexam-carps/TASK.md) | The deliverable of a real benchmark task, `select_subset.py` | The benchmark's own grader, with a feedback split and a sealed split | Imported without edits and checked by grading. No researcher run yet. |
 | [SQLite indexes](sqlite-indexes/TASK.md) | Up to three indexes over a fixed schema | Query results and SQLite work counters | Planned. The evaluator is not built. |
 
 The small runnable examples (curve fitting, packing, threshold deliverable, sum

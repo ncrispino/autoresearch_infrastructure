@@ -196,6 +196,7 @@ class Start:
     mounted as files. ``submissions`` is how many candidates this session may
     record: one, a larger number, or ``None`` for no limit of its own.
     ``context`` says whether the task has context files, mounted at ``/context``.
+    ``candidate_at`` is a second path at which the candidate directory is mounted.
     """
 
     number: int
@@ -208,6 +209,7 @@ class Start:
     summary: bool = False
     submissions: int | None = 1
     context: bool = True
+    candidate_at: str | None = None
 
 
 def present(inputs: ResearcherInputs, start: Start) -> str:

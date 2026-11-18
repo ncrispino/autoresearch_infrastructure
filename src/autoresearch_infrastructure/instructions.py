@@ -124,7 +124,7 @@ def task_facts(objective: Metric | Objective, seed_files: list[str], *, cases: i
         shown += f" and {len(seed_files) - 12} more"
     score = objective.score.name if isinstance(objective.score, Metric) else objective.label
     facts = [
-        f"Starting files: {shown}.",
+        f"Starting files: {shown}." if seed_files else "Starting files: none. The candidate starts empty.",
         f"Score: `{score}`. {better(objective.direction)}.",
     ]
     if objective.tie_breakers:
