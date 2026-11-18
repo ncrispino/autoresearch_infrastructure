@@ -742,6 +742,15 @@ part of it. As for any Harbor environment, Dockerfile `FROM` lines must be
 pinned by digest; a task whose Dockerfile is not pinned needs that one edit, or
 `task_environment=False` with an `--image` you built from it.
 
+**The agents' network.** The task's `[agent]` network policy is kept, so the
+researcher and the reviewer can reach what an agent under `harbor run` can,
+and only while they work. Hosts that name the task's own compose services,
+such as `grader`, are dropped, since those services are not started. The
+instructions say what the network reaches. An agent that calls its model from
+inside the container, such as Codex or Claude Code, needs its provider's host
+on the allowlist; add it under `[task]` as `allowed_hosts = ["openrouter.ai"]`.
+Terminus-2 calls its model from the host and needs nothing added.
+
 An agent may need something the task's image lacks, such as `tmux` for
 Terminus-2. Build an image from the task's own that adds it, and write
 `image = "sha256:..."` under `[task]` in the run settings. The agents then run
@@ -1159,10 +1168,14 @@ submissions. Use it for files written to run from a fixed place. It may not be
 a system directory or a path ARI mounts.
 
 `harbor` names a Harbor task directory. ARI uses only its `task.toml`
-`[environment]` table and its `environment/` directory: a Dockerfile, an
-optional `docker-compose.yaml` for services, or a prebuilt `docker_image`.
-Resources, network policy, environment variables and healthchecks are Harbor's
-own settings. The Harbor task's instruction, tests and solution are ignored.
+`[environment]` table, the network policy of its `[agent]` table, and its
+`environment/` directory: a Dockerfile, an optional `docker-compose.yaml` for
+services, or a prebuilt `docker_image`. Resources, network policy, environment
+variables and healthchecks are Harbor's own settings. Harbor applies the
+`[agent]` network policy only while the agent runs, and `[environment]`'s
+during setup, as it does for a task under `harbor run`; an allowlist is
+enforced by Harbor's egress-control sidecar. The Harbor task's instruction,
+tests and solution are ignored.
 
 ARI adds only what the experiment needs: the working directory, the skills
 directory, its isolation overlay and the mounts for the candidate, context,

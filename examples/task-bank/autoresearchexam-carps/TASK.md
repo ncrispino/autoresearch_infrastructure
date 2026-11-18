@@ -45,6 +45,7 @@ is "no submission".
 | The grader runs each call as uid 1001 with `runuser` | `capabilities=["CHOWN", "SETUID", "SETGID"]` | ARI's grader container has no capabilities otherwise. |
 | `cap_add: SYS_ADMIN` in the compose file | Not needed | Only the benchmark's submit server uses it, for `unshare -n`. ARI's grader container has no network. |
 | `docker-compose.yaml`, the `are` MCP server, `tests/finalize.py` | Not used | They are the benchmark's own submit loop, which `record_candidate` replaces. `tests/test.sh` only reads that loop's ledger. |
+| `[agent]` network: an allowlist of `api.openai.com`, `api.anthropic.com` and `grader` | Kept, without `grader` | ARI applies it while the agents work, as Harbor does. `grader` is the benchmark's compose service, which is not started. The instructions say what the network reaches. |
 | No rules in `instruction.md` | Two rules, written by the importer | The reviewer needs rules to judge. They are marked as the importer's in `task.py`. |
 | `budget_seconds = 86400`, many submissions | `ari.Memory(conversation_mode="continue", conversations="all")` and `override_timeout_sec = 86400` in `run.toml` | One researcher session for 24 hours, as the benchmark runs an agent. |
 | `hints/hint.md` | Not used | The benchmark keeps hints apart from the instruction. |
@@ -82,7 +83,9 @@ Two differences from a native run apply to these numbers:
   task and derives the agents' environment from the task's image. That
   environment holds only `environment/` without `are-grader-ctx/`. No agent has
   started in it.
-- **The agent's network.** The source limits its agent to an allowlist (the model
-  APIs and its grader) in its `[agent]` table. ARI reads only `[environment]`,
-  which says `public`, so an ARI researcher has the open internet. Harbor's Docker
-  backend supports an allowlist; carrying the policy over is not done yet.
+- **The agent's network with a real agent.** The allowlist is carried over and its
+  enforcement was tested through ARI's own agent path with a probe agent, not
+  with this task's image or a model. Terminus-2, in [run.toml](run.toml), calls
+  its model from the host. Codex or Claude Code would call it from inside the
+  container, so a provider other than OpenAI or Anthropic needs
+  `allowed_hosts` under `[task]`.

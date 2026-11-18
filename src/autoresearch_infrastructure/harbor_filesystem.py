@@ -113,7 +113,8 @@ def run_filesystem_agent(
 
     ``environment`` is an optional ``HarborEnvironment``: its ``[environment]``
     settings, prepared image and services replace the plain ``image``
-    container. ARI's working directory, skills directory and isolation overlay
+    container, and its ``[agent]`` network policy applies while the agent
+    runs. ARI's working directory, skills directory and isolation overlay
     still apply. Every job runs on local Docker and is deleted with its volumes
     when it ends, so only the mounted workspace outlives a start.
 
@@ -140,6 +141,8 @@ def run_filesystem_agent(
     evidence, workspace, jobs_root = Path(evidence), Path(workspace), Path(jobs_root)
     evidence.mkdir(parents=True, exist_ok=True)
     task = evidence / "filesystem-task"
+    # Harbor applies a task's [agent] network policy while the agent runs, and [environment]'s otherwise.
+    agent_network = getattr(environment, "agent_network", None) or {}
     if environment is not None:
         from .harbor_environment import runtime
 
@@ -150,6 +153,7 @@ def run_filesystem_agent(
     (task / "instruction.md").write_text(instruction, encoding="utf-8")
     (task / "task.toml").write_text(FilesystemTask(
         environment={**settings, "workdir": "/workspace", "skills_dir": "/tmp/harbor-skills"},
+        agent=agent_network,
     ).model_dump_toml(), encoding="utf-8")
     isolation = task / "environment/isolation.json"
     environment = {"HOME": "/tmp"}

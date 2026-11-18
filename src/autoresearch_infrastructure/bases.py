@@ -121,6 +121,12 @@ def harbor_deliverable(
     else pass ``objective`` and ``rewards``, a mapping from each metric to the
     feedback reward key that supplies it.
 
+    The task's ``[agent]`` network policy applies to them while they work,
+    without hosts that name the task's own compose services. Names under
+    ``[task] allowed_hosts`` in the run settings are added to an allowlist,
+    such as the provider of an agent that calls its model from inside the
+    container.
+
     The researcher and the reviewer each run in the task's main container,
     built from ``environment/`` without the task's compose file, its MCP
     servers, the grader's build directory and every path in ``private``.
@@ -162,7 +168,8 @@ def harbor_deliverable(
     if task_environment and (run.settings.researcher is not None or run.settings.reviewer is not None):
         hidden = list(private) + ([grader] if evaluator.context is not None and grader is not None else [])
         harbor = deliverables.researcher_environment(task, state / "researcher-environment", private=hidden,
-                                                     image=run.settings.task.get("image"))
+                                                     image=run.settings.task.get("image"),
+                                                     allowed_hosts=run.settings.task.get("allowed_hosts", ()))
     if instructions is None:
         source = task / "instruction.md"
         if not source.is_file() or not source.read_text(encoding="utf-8").strip():
@@ -179,6 +186,7 @@ def harbor_deliverable(
                 "time limit or submission count the text above names.",
                 "The grader runs in a separate container that you cannot reach. Its score is returned to you "
                 "after each submission.",
+                *(_network_note(harbor) if harbor is not None else ()),
                 *(("You work in the task's main container, so its other paths are as the text above says. "
                    + (f"Only `{deliverable}`, `/workspace` and `/tmp` are writable." if elsewhere
                       else "Only `/workspace` and `/tmp` are writable."),) if harbor is not None else ()),
@@ -202,6 +210,19 @@ def harbor_deliverable(
 
 
 _CANDIDATE = "/workspace/candidate"
+
+
+def _network_note(harbor: Path) -> tuple[str, ...]:
+    """What the agents' network reaches while they work, when the task restricts it."""
+    from .harbor_environment import load
+
+    policy = load(harbor).agent_network
+    if policy is None or policy["network_mode"] == "public":
+        return ()
+    if policy["network_mode"] == "no-network":
+        return ("While you work, this container has no network.",)
+    hosts = ", ".join(f"`{host}`" for host in policy["allowed_hosts"]) or "nothing"
+    return (f"While you work, this container's network reaches only: {hosts}.",)
 
 
 def _free_workspace(task: Path, deliverable: str, *, workdir: bool) -> None:

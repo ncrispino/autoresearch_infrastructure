@@ -637,3 +637,132 @@ def test_an_imported_task_tells_the_researcher_its_deliverable_is_writable(tmp_p
     run = imported(tmp_path, "deliverable='/app/output', feedback='/tests/feedback.sh', check_seed=False", settings,
                    **{"seed/answer.txt": "x\n"})
     assert "Only `/app/output`, `/workspace` and `/tmp` are writable." in run.inputs.specification()
+
+
+AGENT_ALLOWLIST = ('[agent]\nnetwork_mode = "allowlist"\nallowed_hosts = ["api.anthropic.com", "grader"]\n')
+
+
+def test_the_agents_keep_the_tasks_agent_allowlist_without_its_own_services(tmp_path):
+    pytest.importorskip("harbor")
+    task = harbor_task(tmp_path / "harbor-task", **{
+        "task.toml": '[environment]\nworkdir = "/app"\nnetwork_mode = "public"\n' + AGENT_ALLOWLIST,
+        "environment/docker-compose.yaml": f"services:\n  grader:\n    image: {BASE}\n",
+    })
+    derived = harbor_deliverable.researcher_environment(task, tmp_path / "derived", allowed_hosts=["openrouter.ai"])
+    loaded = launch.harbor_environment.load(derived)
+    assert loaded.agent_network == {"network_mode": "allowlist",
+                                    "allowed_hosts": ["api.anthropic.com", "openrouter.ai"]}
+    assert loaded.config["network_mode"] == "public"  # setup keeps the task's own baseline
+    public = harbor_task(tmp_path / "public", **{"task.toml": '[environment]\nworkdir = "/app"\n'})
+    assert launch.harbor_environment.load(
+        harbor_deliverable.researcher_environment(public, tmp_path / "plain")).agent_network is None
+    with pytest.raises(ValueError, match="adds to the task's agent allowlist"):
+        harbor_deliverable.researcher_environment(public, tmp_path / "extra", allowed_hosts=["openrouter.ai"])
+
+
+def test_the_researcher_is_told_what_its_network_reaches_and_the_policy_is_in_the_plan(tmp_path):
+    pytest.importorskip("harbor")
+    settings = "reviewer = false\n" + RESEARCHER.replace("86400", "600") + '[task]\nallowed_hosts = ["openrouter.ai"]\n'
+    toml = '[environment]\nworkdir = "/app"\n' + AGENT_ALLOWLIST
+    run = imported(tmp_path, "deliverable='/app/output', feedback='/tests/feedback.sh', check_seed=False", settings,
+                   **{"seed/answer.txt": "x\n", "harbor-task/task.toml": toml,
+                      "harbor-task/environment/docker-compose.yaml": f"services:\n  grader:\n    image: {BASE}\n"})
+    assert ("While you work, this container's network reaches only: `api.anthropic.com`, `openrouter.ai`."
+            in run.inputs.specification())
+    assert run.environment.agent_network["allowed_hosts"] == ["api.anthropic.com", "openrouter.ai"]
+    plan = json.loads((tmp_path / "run/plan.json").read_text())
+    other = launch.harbor_environment.HarborEnvironment(run.environment.config, run.environment.files)
+    assert run.environment.identity != other.identity  # a changed policy is a changed environment
+    assert plan["inputs"]["environment"]["harbor"] is not None
+
+
+def test_each_agent_start_writes_the_agent_network_policy_into_its_harbor_task(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from harbor.job import Job
+
+    from autoresearch_infrastructure.harbor_filesystem import run_filesystem_agent
+
+    async def create(config):
+        async def run():
+            return SimpleNamespace(trial_results=[SimpleNamespace(exception_info=None, trial_name="fixture")])
+
+        return SimpleNamespace(run=run)
+
+    monkeypatch.setattr(Job, "create", create)
+    environment = launch.harbor_environment.HarborEnvironment(
+        {"docker_image": "sha256:" + "a" * 64}, None, tmp_path / "prepared.json",
+        agent_network={"network_mode": "allowlist", "allowed_hosts": ["web"]})
+    monkeypatch.setattr(launch.harbor_environment, "_image_present", lambda image: True)
+    run_filesystem_agent(agent={"name": "nop", "model_name": "fixture"}, image=None, instruction="Fixture",
+                         readonly={}, workspace=tmp_path / "workspace", evidence=tmp_path / "evidence",
+                         jobs_root=tmp_path / "jobs", environment=environment)
+    import tomllib
+
+    written = tomllib.loads((tmp_path / "evidence/filesystem-task/task.toml").read_text())
+    assert written["agent"]["network_mode"] == "allowlist" and written["agent"]["allowed_hosts"] == ["web"]
+
+
+PROBE_AGENT = '''
+from harbor.agents.base import BaseAgent
+from harbor.agents.capabilities import AgentCapabilities
+
+# Each server answers with its own name; anything else means the request was blocked.
+PROBE = ("python -c \\"import sys, urllib.request\\n"
+         "for host in ('web', 'other'):\\n"
+         "    try:\\n"
+         "        body = urllib.request.urlopen('http://' + host + '/', timeout=4).read().decode().strip()\\n"
+         "    except Exception as error:\\n"
+         "        body = type(error).__name__\\n"
+         "    print(host, 'open' if body == 'hello-' + host else 'closed')\\" > /workspace/{phase}.txt")
+
+
+class Probe(BaseAgent):
+    capabilities = AgentCapabilities(skills=True)  # ARI's generated task always names a skills directory
+
+    @staticmethod
+    def name():
+        return "network-probe"
+
+    def version(self):
+        return "1"
+
+    async def setup(self, environment):
+        await environment.exec(PROBE.format(phase="setup"))
+
+    async def run(self, instruction, environment, context):
+        await environment.exec(PROBE.format(phase="run"))
+'''
+
+
+@docker
+def test_the_agent_allowlist_is_enforced_while_the_agent_runs_and_not_during_setup(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from autoresearch_infrastructure.harbor_filesystem import run_filesystem_agent
+
+    python = "python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+    servers = "".join(
+        f"  {name}:\n    image: {BASE}\n    networks: [default]\n"  # explicit networks: not egress-controlled
+        f"    command: [\"sh\", \"-c\", \"echo hello-{name} > /tmp/index.html && httpd -f -p 80 -h /tmp\"]\n"
+        for name in ("web", "other"))
+    materialize(tmp_path / "env-task", {
+        "task.toml": (f'[environment]\ndocker_image = "{python}"\ncpus = 1\n'
+                      '[agent]\nnetwork_mode = "allowlist"\nallowed_hosts = ["web"]\n'),
+        "environment/docker-compose.yaml": "services:\n" + servers,
+    })
+    loaded = launch.harbor_environment.load(tmp_path / "env-task")
+    assert loaded.agent_network == {"network_mode": "allowlist", "allowed_hosts": ["web"]}
+    environment = launch.harbor_environment.HarborEnvironment(
+        loaded.config, loaded.files, tmp_path / "prepared.json", agent_network=loaded.agent_network)
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "agents/probe_agent.py").write_text(PROBE_AGENT)
+    monkeypatch.syspath_prepend(str(tmp_path / "agents"))
+    before = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True).stdout
+    workspace = tmp_path / "workspace"
+    result = run_filesystem_agent(
+        agent={"import_path": "probe_agent:Probe", "model_name": "fixture"}, image=None, instruction="Probe",
+        readonly={}, workspace=workspace, evidence=tmp_path / "evidence", jobs_root=tmp_path / "jobs",
+        environment=environment, role="network-probe")
+    assert result.exception_info is None, result.exception_info
+    assert (workspace / "setup.txt").read_text().split() == ["web", "open", "other", "open"]
+    assert (workspace / "run.txt").read_text().split() == ["web", "open", "other", "closed"]
+    assert subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True).stdout == before

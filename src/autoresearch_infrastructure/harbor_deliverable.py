@@ -528,7 +528,8 @@ def _image_present(image: str) -> bool:
     return subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode == 0
 
 
-def researcher_environment(task: Path, destination: Path, *, private=(), image: str | None = None) -> Path:
+def researcher_environment(task: Path, destination: Path, *, private=(), image: str | None = None,
+                           allowed_hosts=()) -> Path:
     """Write a Harbor environment for the researcher: the task's main container and nothing of its grader.
 
     The copy holds ``task.toml`` with only the ``[environment]`` table and the
@@ -543,12 +544,21 @@ def researcher_environment(task: Path, destination: Path, *, private=(), image: 
     ``image`` is an image pinned by digest to run instead of building the
     Dockerfile: the task's image with what an agent needs added to it.
 
+    The task's ``[agent]`` network policy is kept, so the agents can reach what
+    an agent under ``harbor run`` can, and only while they run. Hosts that
+    name the task's own compose services, such as its grader, are dropped,
+    since those services are not started. ``allowed_hosts`` adds hosts to an
+    allowlist, such as the model provider of an agent that calls it from
+    inside the container.
+
     Calling it again checks that the copy is unchanged.
     """
     from harbor.models.task.config import TaskConfig
 
     task = Path(task)
-    table = dict(tomllib.loads((task / "task.toml").read_text(encoding="utf-8")).get("environment") or {})
+    manifest = tomllib.loads((task / "task.toml").read_text(encoding="utf-8"))
+    table = dict(manifest.get("environment") or {})
+    agent = _agent_policy(task, manifest.get("agent") or {}, list(allowed_hosts))
     for name in ("workdir", "skills_dir", "mcp_servers"):  # ARI sets the first two and replaces the submit tool
         table.pop(name, None)
     if image is not None:
@@ -569,7 +579,8 @@ def researcher_environment(task: Path, destination: Path, *, private=(), image: 
     with tempfile.TemporaryDirectory(prefix="ari-researcher-environment-") as scratch:
         staged = Path(scratch) / "task"
         staged.mkdir()
-        (staged / "task.toml").write_text(TaskConfig(environment=table).model_dump_toml(), encoding="utf-8")
+        (staged / "task.toml").write_text(TaskConfig(environment=table, agent=agent).model_dump_toml(),
+                                          encoding="utf-8")
         if source.is_dir():
             shutil.copytree(source, staged / "environment", ignore=ignore)
         if not destination.exists():
@@ -578,6 +589,27 @@ def researcher_environment(task: Path, destination: Path, *, private=(), image: 
         elif task_context_digest(destination) != task_context_digest(staged):
             raise ValueError("The Harbor task's environment changed; use a fresh output")
     return destination
+
+
+def _agent_policy(task: Path, table: dict, extra: list[str]) -> dict:
+    """The task's [agent] network policy without its own compose services, plus ``extra`` hosts."""
+    mode, hosts = table.get("network_mode"), list(table.get("allowed_hosts") or [])
+    if extra and mode != "allowlist":
+        raise ValueError(f"allowed_hosts adds to the task's agent allowlist, but its [agent] network_mode is "
+                         f"{mode or 'not set'}")
+    if mode is None:
+        return {}
+    compose = task / "environment/docker-compose.yaml"
+    services = set()
+    if compose.is_file():
+        import yaml
+
+        services = set(((yaml.safe_load(compose.read_text(encoding="utf-8")) or {}).get("services") or {}))
+    kept = [host for host in hosts if host not in services]
+    policy = {"network_mode": mode}
+    if mode == "allowlist":
+        policy["allowed_hosts"] = list(dict.fromkeys(kept + extra))
+    return policy
 
 
 def sealed_rewards(output: Path) -> list[dict]:

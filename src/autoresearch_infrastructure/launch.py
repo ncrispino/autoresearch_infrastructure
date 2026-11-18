@@ -255,7 +255,10 @@ class _Opening:
 
         def environment_identity(name):
             environment = environments[name]
-            return None if environment is None else digest({"config": environment.config, "files": digests[name]})
+            if environment is None:
+                return None
+            return digest({"config": environment.config, "files": digests[name],
+                           **({"agent_network": environment.agent_network} if environment.agent_network else {})})
 
         plan = _json({
             **self.opened_with,
@@ -290,7 +293,8 @@ class _Opening:
         write_json(output / "plan.json", plan)
         prepared = {
             name: None if environment is None else harbor_environment.HarborEnvironment(
-                environment.config, output / name, output / "prepared" / f"{name}.json")
+                environment.config, output / name, output / "prepared" / f"{name}.json",
+                agent_network=environment.agent_network)
             for name, environment in environments.items()
         }
 

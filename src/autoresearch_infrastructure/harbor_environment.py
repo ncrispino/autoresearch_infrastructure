@@ -49,17 +49,25 @@ _SERVICE_FORBIDDEN = {"privileged", "cap_add", "devices", "pid", "ipc", "userns_
 
 @dataclass(frozen=True)
 class HarborEnvironment:
-    """A checked Harbor environment definition, and where its preparation is recorded."""
+    """A checked Harbor environment definition, and where its preparation is recorded.
+
+    ``agent_network`` is the task's ``[agent]`` network policy, as
+    ``{"network_mode": ..., "allowed_hosts": [...]}``, or None when the task
+    sets none. Harbor applies it while the agent runs, and ``config``'s own
+    network policy at every other time.
+    """
 
     config: dict
     files: Path | None
     record: Path | None = None
+    agent_network: dict | None = None
 
     @property
     def identity(self) -> str:
-        """The definition: its settings and every file in ``environment/``."""
+        """The definition: its settings, its agent network policy and every file in ``environment/``."""
         return digest({"config": self.config,
-                       "files": task_context_digest(self.files) if self.files else None})
+                       "files": task_context_digest(self.files) if self.files else None,
+                       **({"agent_network": self.agent_network} if self.agent_network else {})})
 
     @property
     def sidecars(self) -> dict[str, str]:
@@ -91,9 +99,11 @@ def load(directory: Path) -> HarborEnvironment:
     files = directory / "environment"
     if not manifest.is_file():
         raise ValueError(f"No Harbor task.toml at {manifest}")
-    table = tomllib.loads(manifest.read_text(encoding="utf-8")).get("environment", {})
+    manifest_tables = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    table = manifest_tables.get("environment", {})
     if not isinstance(table, dict):
         raise ValueError("task.toml [environment] must be a table")
+    agent_network = _agent_network(manifest_tables.get("agent", {}))
     if set(table) & _RESERVED:
         raise ValueError(f"ARI sets {sorted(_RESERVED)}; remove them from [environment]")
     if set(table) & _UNSUPPORTED:
@@ -107,7 +117,7 @@ def load(directory: Path) -> HarborEnvironment:
     if not files.is_dir():
         if "docker_image" not in table:
             raise ValueError(f"A Harbor environment needs {files}/Dockerfile or [environment] docker_image")
-        return HarborEnvironment(config, None)  # the prebuilt image is the whole environment
+        return HarborEnvironment(config, None, agent_network=agent_network)  # the prebuilt image is everything
     if any((files / name).exists() for name in _RESERVED_FILES):
         raise ValueError(f"environment/ may not contain {sorted(_RESERVED_FILES)}; ARI writes it")
     dockerfile = files / "Dockerfile"
@@ -119,7 +129,21 @@ def load(directory: Path) -> HarborEnvironment:
     if compose.is_file():
         _check_compose(compose)
     task_context_digest(files)  # bounded, regular files only
-    return HarborEnvironment(config, files)
+    return HarborEnvironment(config, files, agent_network=agent_network)
+
+
+def _agent_network(table) -> dict | None:
+    """The ``[agent]`` table's network policy, checked by Harbor's own model, or None when it sets none."""
+    from harbor.models.task.config import AgentConfig
+
+    if not isinstance(table, dict):
+        raise ValueError("task.toml [agent] must be a table")
+    policy = {key: table[key] for key in ("network_mode", "allowed_hosts") if key in table}
+    if not policy:
+        return None
+    checked = AgentConfig.model_validate(policy)
+    return {"network_mode": checked.network_mode.value,
+            "allowed_hosts": list(checked.allowed_hosts or [])}
 
 
 def stage(environment: HarborEnvironment, target: Path) -> Path:
