@@ -66,5 +66,7 @@ ari run   examples/threshold-deliverable --output runs/threshold-live
 `ari run` calls your models and costs money. There is no `--image`: the
 researcher and the reviewer both run in the Harbor task's own container, built
 from `harbor-task/environment/`. The agent in [run.toml](run.toml) is Terminus-2,
-which also needs `tmux` in that image; the task's Dockerfile has only Python, so
-choose an agent that the image supports or add what yours needs.
+which also needs `tmux`, and the task's Dockerfile has only Python. Build an
+image from the task's own that adds it and name its ID under `[task] image` in
+`run.toml`, as the [curve-fitting example](../curve-fitting/README.md#run-a-harbor-researcher)
+shows. The grader keeps using the task's own image.

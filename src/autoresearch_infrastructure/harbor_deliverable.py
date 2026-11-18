@@ -341,7 +341,7 @@ def _image_present(image: str) -> bool:
     return subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode == 0
 
 
-def researcher_environment(task: Path, destination: Path, *, private=()) -> Path:
+def researcher_environment(task: Path, destination: Path, *, private=(), image: str | None = None) -> Path:
     """Write a Harbor environment for the researcher: the task's main container and nothing of its grader.
 
     The copy holds ``task.toml`` with only the ``[environment]`` table and the
@@ -353,6 +353,9 @@ def researcher_environment(task: Path, destination: Path, *, private=()) -> Path
     ``tests/`` and ``solution/`` lie outside ``environment/`` and are never
     copied.
 
+    ``image`` is an image pinned by digest to run instead of building the
+    Dockerfile: the task's image with what an agent needs added to it.
+
     Calling it again checks that the copy is unchanged.
     """
     from harbor.models.task.config import TaskConfig
@@ -361,6 +364,10 @@ def researcher_environment(task: Path, destination: Path, *, private=()) -> Path
     table = dict(tomllib.loads((task / "task.toml").read_text(encoding="utf-8")).get("environment") or {})
     for name in ("workdir", "skills_dir", "mcp_servers"):  # ARI sets the first two and replaces the submit tool
         table.pop(name, None)
+    if image is not None:
+        if not _PINNED.fullmatch(str(image)):
+            raise ValueError("[task] image must be an image ID or digest (sha256:...)")
+        table["docker_image"] = image
     source = task / "environment"
     excluded = {(task / "environment/docker-compose.yaml").resolve()}
     for name in private:

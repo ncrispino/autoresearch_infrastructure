@@ -2,8 +2,11 @@
 
 Use the Python API when you want to write the proposal loop yourself, evaluate
 edits you make by hand, or embed an experiment in another program. None of this
-needs agents, Docker or Harbor. To have an LLM researcher propose changes, start
-with the [README](../README.md).
+needs agents or the Harbor package. The curve-fitting example below is a Harbor
+task, so grading it needs Docker; a task with a
+[Python evaluator](../reference.md#define-a-task-in-python), such as
+[packing](../examples/packing/task.py) with its own `demo.py`, needs neither.
+To have an LLM researcher propose changes, start with the [README](../README.md).
 
 The core needs Python 3.12 or later and has no third-party dependencies. Install
 it from the package directory with `uv pip install -e .`, and run the commands
@@ -34,7 +37,8 @@ Selected: candidate-0004
 The script records a baseline that predicts zero, then least-squares constant,
 linear and quadratic fits, then a coefficient outside the allowed range. The
 task's validity function rejects the last one, so it is saved and not evaluated. The output
-directory must be new.
+directory must be new. The Harbor task's grader scores each of the others in a
+short-lived container; the first one builds the task's image.
 
 This is fixture evidence. It shows that recording, checking, evaluating and
 selecting work. The error is measured on the same observations the coefficients
@@ -69,7 +73,7 @@ and is never drawn as zero.
 <details>
 <summary>One candidate's evaluation, and the candidate table</summary>
 
-An evaluator can save images, such as the fitted curve below. The page shows them
+A grader can save images, such as the fitted curve below. The page shows them
 beside that evaluation's metrics.
 
 ![The selected candidate's verdict, its three metrics, and the evaluator's plot of the quadratic through the thirteen observations.](assets/curve-viewer.png)

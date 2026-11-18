@@ -169,6 +169,12 @@ def test_a_configured_researcher_runs_in_the_derived_environment_and_may_take_a_
     staged = tmp_path / "run/environment"
     assert (staged / "Dockerfile").is_file() and (staged / "train.csv").is_file()
     assert not list(staged.rglob("*.sh")) and not list(staged.rglob("sealed.csv"))
+    # An image named under [task] replaces the build for the agents, and only for them.
+    pinned = "sha256:" + "d" * 64
+    other = open_copy(tmp_path / "pinned", "reviewer = false\n" + RESEARCHER + f'[task]\nimage = "{pinned}"\n')
+    assert other.environment.config["docker_image"] == pinned and other.task.evaluator.grader is None
+    with pytest.raises(ValueError, match="image ID or digest"):
+        open_copy(tmp_path / "tagged", "reviewer = false\n" + RESEARCHER + '[task]\nimage = "python:3.12"\n')
     with pytest.raises(ValueError, match="at most 86400 seconds"):
         ari.RunSettings.parse({"reviewer": False, "researcher": {
             "name": "terminus-2", "model_name": "openrouter/openai/gpt-6-luna", "override_timeout_sec": 86401}})

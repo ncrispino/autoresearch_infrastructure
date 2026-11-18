@@ -9,7 +9,16 @@ drive an experiment from your own Python, see
 import autoresearch_infrastructure as ari
 ```
 
-## Define a task
+## Define a task in Python
+
+Most tasks are a Harbor task directory with a short `task.py` that calls a
+[Harbor base task](#harbor-base-tasks); start there. This section describes the
+interface those base tasks are built on: `ari.Task`, with an evaluator that is a
+Python function ARI calls on the host. Use it directly when no base task fits,
+or for a small problem where a container would add nothing. It needs neither
+Docker nor Harbor.
+
+![task.py holds the task, run.toml says who runs it, and the ari commands read both and write the results. The researcher reads the objective and constraints you wrote, plus what is measured and how to submit, which ARI adds.](docs/assets/experiment-parts.svg)
 
 A task is a file, `task.py`, that defines `task(run)` and returns an `ari.Task`.
 
@@ -71,8 +80,8 @@ Six more are optional:
 the parsed run settings, `run.output` is the run directory and `run.image` is the
 `--image` value. `task.py` can import modules beside it.
 
-To build a task on Harbor tasks, call a [Harbor base task](#harbor-base-tasks)
-in place of `ari.Task`.
+A [Harbor base task](#harbor-base-tasks) returns an `ari.Task` built this way,
+with the Harbor task's grader as the evaluator.
 
 ## Run settings
 
@@ -169,9 +178,8 @@ Three ways to reuse a run differ in what they keep:
 | To judge saved candidates under a changed evaluator or rules | `ari import` into a new directory | The source's candidates are recorded again with the same IDs, parents and proposals, then reviewed and evaluated under the new task before any researcher starts. No evidence is reused, and the new run's limits pay for it. |
 
 ```sh
-ari extend examples/curve-fitting --from runs/curve --output runs/curve-more \
-  --config more.toml --image <image-id>
-ari run examples/curve-fitting --output runs/curve-more --image <image-id>
+ari extend examples/curve-fitting --from runs/curve --output runs/curve-more --config more.toml
+ari run examples/curve-fitting --output runs/curve-more
 ```
 
 The limits in `more.toml` are cumulative totals, not additions, and may not be
@@ -683,6 +691,8 @@ def task(run):
 | `objective`, `rewards` | The default objective is the metric `reward`, higher is better, read from the feedback script's single reward. For other rewards, pass an objective and `rewards={METRIC: "reward_key"}` together. |
 | `validity` | An optional validity function. |
 | `task_environment` | `True` (the default) runs the researcher and the reviewer in the Harbor task's main container. `False` runs them in `--image`. |
+| `cases` | Names of the fixed inputs every candidate is graded on. Each is a separate run of the scripts, which read the name from the environment variable `ARI_CASE`. The default is one case. |
+| `feedback_artifacts` | `True` shows the researcher the files the feedback script writes under `/logs/artifacts`, such as a plot. Off, they stay in the private evidence. The sealed script's files are always private. |
 | `private` | More paths in the Harbor task to keep out of the agents' container. |
 | `memory` | An `ari.Memory`, as in `ari.Task`. |
 | `capabilities`, `network`, `feedback_log` | Loosen the grader container: Linux capabilities to keep, the default Docker network, and publishing the feedback script's output to the researcher. All are off by default. |
@@ -732,12 +742,20 @@ part of it. As for any Harbor environment, Dockerfile `FROM` lines must be
 pinned by digest; a task whose Dockerfile is not pinned needs that one edit, or
 `task_environment=False` with an `--image` you built from it.
 
+An agent may need something the task's image lacks, such as `tmux` for
+Terminus-2. Build an image from the task's own that adds it, and write
+`image = "sha256:..."` under `[task]` in the run settings. The agents then run
+in that image. The grader still uses the task's own image.
+
 The instructions tell the researcher that the deliverable directory is
 `/workspace/candidate/` and that `record_candidate` replaces the task's own
 submission tool. Review needs at least one rule, which a Harbor instruction
 does not list: pass `rules`, or write `reviewer = false`.
 
-See the [threshold-deliverable example](examples/threshold-deliverable/README.md).
+See the [curve-fitting example](examples/curve-fitting/README.md), which has
+one script and three rewards, and the
+[threshold-deliverable example](examples/threshold-deliverable/README.md), which
+has a sealed split.
 
 #### A benchmark's time budget
 

@@ -11,3 +11,9 @@ model_name = "openrouter/openai/gpt-6-luna"
 override_timeout_sec = 600
 [researcher.kwargs]
 record_terminal_session = false
+
+[task]
+# The researcher and reviewer run in the Harbor task's container. Its Dockerfile
+# has Python only. Terminus-2 also needs tmux, so build an image from the task's
+# own that adds it and pin its ID here. The grader keeps using the task's image.
+# image = "sha256:<agent-ready-task-image-id>"

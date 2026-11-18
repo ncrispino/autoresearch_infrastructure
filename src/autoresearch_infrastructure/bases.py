@@ -110,7 +110,10 @@ def harbor_deliverable(
     The researcher and the reviewer each run in the task's main container,
     built from ``environment/`` without the task's compose file, its MCP
     servers, the grader's build directory and every path in ``private``.
-    Dockerfile ``FROM`` lines must be pinned by digest.
+    Dockerfile ``FROM`` lines must be pinned by digest. When the agents need
+    something the task's image lacks, such as ``tmux``, build an image from the
+    task's own with that added and name it as ``image = "sha256:..."`` under
+    ``[task]`` in the run settings; the grader still uses the task's image.
     ``task_environment=False`` runs them in the ``--image`` container instead.
 
     ``cases`` names the fixed inputs every candidate is graded on. Each one is
@@ -136,7 +139,8 @@ def harbor_deliverable(
     harbor = None
     if task_environment and (run.settings.researcher is not None or run.settings.reviewer is not None):
         hidden = list(private) + ([grader] if evaluator.context is not None and grader is not None else [])
-        harbor = deliverables.researcher_environment(task, state / "researcher-environment", private=hidden)
+        harbor = deliverables.researcher_environment(task, state / "researcher-environment", private=hidden,
+                                                     image=run.settings.task.get("image"))
     if instructions is None:
         source = task / "instruction.md"
         if not source.is_file() or not source.read_text(encoding="utf-8").strip():

@@ -1,7 +1,7 @@
 # Configure and launch a run
 
 A run needs a task directory containing `task.py`, run settings in `run.toml`,
-and a container image if it uses agents. The
+and a container for its agents: the Harbor task's own, or an `--image`. The
 [API reference](../../../reference.md) lists every run setting, command option
 and saved file. This guide covers the choices you make: agents, budget, image and
 credentials, and the order of commands. [Design a task](task-integration.md)
@@ -27,6 +27,8 @@ Run settings have four tables:
 | Part | Where it runs | What its image must contain |
 | --- | --- | --- |
 | `ari`, the validity function and a Python evaluator | The host process | |
+| Grader of an `ari.bases.harbor_deliverable` task | A new container for each evaluation, from the Harbor task's image | Whatever the task's grader script uses. It is built once from the task's Dockerfile. |
+| Researcher and reviewer of an `ari.bases.harbor_deliverable` task | The Harbor task's container, without the grader's files | `python` on the path, and what the chosen agent needs. If the task's image lacks it, build an image from the task's own that adds it and pin its ID as `[task] image`. No `--image` is passed. |
 | Researcher | A container from `--image`, or from the task's Harbor `environment` | `python` on the path, for the submission client, and what the chosen agent needs: `tmux` for Terminus-2, the CLI for Codex or Claude Code |
 | Reviewer | A container from `--reviewer-image` if given, else `--image`, or from the task's `review_environment` | What the chosen agent needs |
 | Solver of an `ari.bases.harbor_harness` task | Its CLI sessions run in containers from `--image` | The `codex` or `claude` CLI |
@@ -161,7 +163,8 @@ is passed into a container as readable by anything that runs in that container.
 ## Check, then launch
 
 Run `ari check` first. It opens the task and the settings, saves the plan and
-prints the budget. It starts nothing. This example needs no Docker and no models:
+prints the budget. It starts and builds nothing, so this example needs no Docker
+and no models:
 
 ```sh
 uv run ari check autoresearch_infrastructure/examples/curve-fitting \
