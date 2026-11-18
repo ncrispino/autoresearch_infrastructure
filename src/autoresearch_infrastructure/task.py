@@ -22,6 +22,7 @@ _LIMITS = {
     "repeats": "selection_repeats",
     "parallel": "parallel_evaluations",
 }
+_TIMEOUTS = ("override_timeout_sec", "override_setup_timeout_sec", "max_timeout_sec")
 
 
 @dataclass(frozen=True)
@@ -183,6 +184,9 @@ class RunSettings:
             )
         elif reviewer is not researcher:
             reviewer = _agent(reviewer, "reviewer")
+        elif max(reviewer.get(name) or 0 for name in _TIMEOUTS) > 7200:
+            raise ValueError("The reviewer defaults to the researcher's agent, whose timeout is over the "
+                             "reviewer's 7200 seconds. Add a [reviewer] table with its own timeout")
         return cls(Limits(**fields), researcher, reviewer, dict(data.get("task", {})))
 
     @property
@@ -205,12 +209,13 @@ class RunSettings:
 
 def _agent(table, role: str) -> dict:
     """Check a Harbor agent table now, so a mistake costs no start, and fill its timeout."""
-    from .harbor_filesystem import native_agent_config
+    from .harbor_filesystem import RESEARCHER_MAX_TIMEOUT, native_agent_config
 
     if not isinstance(table, dict):
         raise ValueError(f"[{role}] must be a table of Harbor agent settings")
     researcher = role == "researcher"
-    agent = native_agent_config(table, default_timeout=600 if researcher else 240, researcher=researcher)
+    agent = native_agent_config(table, default_timeout=600 if researcher else 240, researcher=researcher,
+                                max_timeout=RESEARCHER_MAX_TIMEOUT if researcher else 7200)
     return agent.model_dump(mode="json")
 
 

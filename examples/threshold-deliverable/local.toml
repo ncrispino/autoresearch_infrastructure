@@ -1,0 +1,6 @@
+# Run settings without agents: you make the proposals with `ari record`.
+reviewer = false     # nothing judges the rules
+
+[limits]
+candidates = 5
+evaluations = 5

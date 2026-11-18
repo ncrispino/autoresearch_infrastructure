@@ -2,19 +2,23 @@
 
 A "Harbor task" is Harbor's own unit: a directory with `task.toml`,
 `instruction.md`, an environment and tests. To optimize something that is
-measured on Harbor tasks, build your task with one of the two functions in
+measured on Harbor tasks, build your task with one of the three functions in
 [`ari.bases`](../../../src/autoresearch_infrastructure/bases.py). Each returns a
 complete `ari.Task`, so `task.py` is a few lines.
 
 | You want to change | What stays fixed | Function | Copy |
 | --- | --- | --- | --- |
+| The deliverable the Harbor task asks for | The Harbor task and its grader | `ari.bases.harbor_deliverable` | [threshold-deliverable](../../../examples/threshold-deliverable/README.md) |
 | Files of the Harbor tasks, such as their instructions | The solver | `ari.bases.harbor_task_files` | [sum-instructions](../../../examples/sum-instructions/README.md) |
 | The solver harness | The Harbor tasks and their graders | `ari.bases.harbor_harness` | [sum-harness](../../../examples/sum-harness/README.md) |
 
 The solver is the agent being evaluated. The harness is the program, prompts,
 skills and hooks that drive a coding-agent CLI.
 
-Both functions work the same way in these respects:
+`harbor_deliverable` starts no solver: the task's grader scores the candidate
+directly. It is described under
+[Improve a Harbor task's deliverable](#improve-a-harbor-tasks-deliverable).
+The other two functions work the same way in these respects:
 
 - `harbor_tasks` maps a case name to a Harbor task directory. Each Harbor task
   is one case of your task.
@@ -31,6 +35,51 @@ Both functions work the same way in these respects:
   run if they change.
 
 Both need Docker and the package's `harbor` extra, which installs Harbor 0.24.0.
+
+## Improve a Harbor task's deliverable
+
+Use this to import a benchmark task in which the agent writes files into one
+directory and a grader scores them. The Harbor task directory is used as it is.
+
+![The files of a Harbor deliverable task and where each one is used at run time.](../../../docs/assets/harbor-deliverable.svg)
+
+A Harbor task leaves out three things that `task.py` must name. Find each one
+in the source task before writing anything:
+
+| `task.py` names | How to find it in the source task |
+| --- | --- |
+| `deliverable` | The directory the instruction tells the agent to write into, such as `/app/output`. Its unimproved contents go in `seed/`. |
+| `feedback` | A grader script that scores a split the agent may be shown. Many benchmarks have one for intermediate submissions. If the task has only `tests/test.sh`, divide its hidden instances into two splits once and write a script for each. |
+| `sealed` | The script for the final, hidden split. Never pass the same script as `feedback`. |
+| `rules` | The sentences of `instruction.md` that a candidate could break and someone has to judge. Add your own if the source has none, and say so in the task's README. |
+| `grader` | Only when the grader has its own image: the directory in the Harbor task that holds its Dockerfile. |
+
+A task's top-level `tests/test.sh` is not always the grader. Some benchmarks
+grade through their own submission service and leave a `test.sh` that only
+reads that service's ledger. ARI replaces the service, so name the scripts
+inside the grader image that do the scoring, and pass `grader=`.
+
+Check these before a paid run:
+
+1. `ari check` opens the task and builds nothing.
+2. `ari record` with settings that have no agents grades the seed. It needs
+   Docker only. Confirm the reward is the number the source reports for the
+   unimproved deliverable.
+3. `ari sealed <dir>` shows that the sealed script ran and gave a different
+   number from the feedback script.
+4. Record a known better deliverable, such as the output of the task's
+   `solution/`, and confirm that the reward rises. This is the headroom check.
+
+The researcher and the reviewer run in the task's main container, built from
+`environment/` without the grader's directory, the task's compose file and its
+MCP servers. A Dockerfile `FROM` line that is not pinned by digest is refused;
+pin it, or pass `task_environment=False` and an `--image`. To reproduce a
+benchmark's wall-clock budget with one agent session, see
+[A benchmark's time budget](../../../reference.md#a-benchmarks-time-budget).
+
+What still does not fit: a grader that needs several containers at once, a GPU
+for grading, and scoring the sealed split for candidates that review rejected.
+Say so in the task's README if one applies.
 
 ## Edit Harbor task files with a fixed solver
 

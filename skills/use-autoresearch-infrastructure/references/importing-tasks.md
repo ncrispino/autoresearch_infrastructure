@@ -51,8 +51,10 @@ run is measured". A suggestion about approach can close it.
    under Rules. The researcher has to read a rule to obey it, and a validity function costs
    no reviewer start.
 4. **Decide what the evaluator is.** Reuse the source task's grader where you
-   can. If the source task is a Harbor task, start from a base task in
-   [Harbor tasks](harbor-harness.md).
+   can. If the source task is a Harbor task that grades a deliverable, use it as
+   it is with `ari.bases.harbor_deliverable`, described in
+   [Harbor tasks](harbor-harness.md#improve-a-harbor-tasks-deliverable). The
+   instruction then becomes the Objective unsplit, and you add only the Rules.
 5. **Write down what does not fit.** Do not bend the task to hide a gap. The
    common gaps are listed at the end of this guide.
 
@@ -196,25 +198,30 @@ What changed between each source and its import:
 Rules added in an import are a judgment by the importer. Mark them, as this
 table does, so that a reader can tell the source's requirements from yours.
 
-## What does not fit today
+## What fits now, and what does not
 
-All three tasks share gaps that an import has to state instead of hiding.
+These tasks share four needs that a hand-written import used to leave out.
+`ari.bases.harbor_deliverable` covers them for a source task that is a Harbor
+task:
 
 - **A private score.** Each benchmark shows the agent a public score and ranks
-  it on a hidden one. In ARI the researcher sees the score that selects the best
-  candidate. An import that used the hidden split as the evaluator would leak it
-  to the researcher through the returned score.
-- **Working inside the task's environment.** These tasks expect the agent to
-  run experiments beside the data, the GPU and a local validator. ARI's
-  researcher runs in a small container that holds the candidate, `/context` and
-  `/history`. Material can be copied into `context`, but a GPU and an 18 GB data
-  pool cannot.
-- **Long runs.** The tasks give one agent 4 to 24 hours. ARI charges one
-  researcher start for each candidate, so the budget has to be restated in
-  candidates and evaluations.
-- **Many submissions from one session.** These tasks let one agent submit
-  repeatedly. An ARI researcher submits one candidate per start.
+  it on a hidden one. Name the public script as `feedback` and the hidden one
+  as `sealed`. The researcher and selection see only the first. Never use the
+  hidden split as the evaluator's score: it would reach the researcher through
+  the returned number.
+- **Working inside the task's environment.** The researcher runs in the task's
+  main container, beside its data and local validator.
+- **Long runs.** The researcher's timeout may be a day.
+- **Many submissions from one session.** `ari.Memory(conversation_mode="continue",
+  conversations="all")` lets one session submit until a limit is reached.
 
-Two of the three are Harbor tasks and run as they are with `harbor run`, without
-ARI. Import a task into ARI when you want ARI's saved candidates, review and
-budget around it, and say in the task's README which of these gaps apply.
+What still does not fit:
+
+- A task that is not a Harbor task needs its grader wrapped in a Python
+  `evaluator`, with the four gaps above stated in its README.
+- A GPU, or a grader made of several containers running together.
+- A data pool too large to build into an image on your machine.
+
+Two of the three tasks above are Harbor tasks and run as they are with
+`harbor run`, without ARI. Import a task into ARI when you want ARI's saved
+candidates, review and budget around it.

@@ -32,16 +32,23 @@ def main(argv=None):
     for name, summary in {
         "view": "Export the results of a run as one HTML page.",
         "inspect": "Print the results of a run as JSON.",
+        "sealed": "Print the held-out rewards a Harbor deliverable task recorded privately, as JSON.",
     }.items():
         command = commands.add_parser(name, help=summary, description=summary)
         command.add_argument("output", type=Path, help="A run directory or an experiment output")
         if name == "view":
             command.add_argument("--html", type=Path, required=True, help="A new file to write")
-        command.add_argument("--partial-evidence", type=Path,
-                             help="Inventory of partial native evidence approved by the controller")
+        if name != "sealed":
+            command.add_argument("--partial-evidence", type=Path,
+                                 help="Inventory of partial native evidence approved by the controller")
     args = parser.parse_args(argv)
     if args.command in actions:
         return _task_command(args)
+    if args.command == "sealed":
+        from .harbor_deliverable import sealed_rewards
+
+        print(json.dumps(sealed_rewards(args.output), indent=2))
+        return 0
 
     from .viewer import build_index, write_html_preview
 

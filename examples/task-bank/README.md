@@ -10,8 +10,8 @@ and what was observed.
 | [SpreadsheetBench Verified](spreadsheet-canary/TASK.md) | The fixed baseline program, then a solver program | The unchanged SpreadsheetBench Verified verifier | Baseline calibrations and harness studies run with live models. No improvement established. |
 | [SQLite indexes](sqlite-indexes/TASK.md) | Up to three indexes over a fixed schema | Query results and SQLite work counters | Planned. The evaluator is not built. |
 
-The small runnable examples (curve fitting, packing, sum instructions and sum
-harness) are listed in the [package README](../../README.md).
+The small runnable examples (curve fitting, packing, threshold deliverable, sum
+instructions and sum harness) are listed in the [package README](../../README.md).
 
 ## Which tool reads which file
 

@@ -214,33 +214,68 @@ reviewed against those. To judge its candidates against other rules afterwards,
 use the saved outputs listed under
 [Relabel a finished run](reference.md#relabel-a-finished-run).
 
-## Build on a Harbor task
+## Start from a Harbor task
 
-Most agent experiments evaluate on Harbor tasks. ARI has two tasks to build on,
-so a new one is a few lines.
+A [Harbor task](https://github.com/harbor-framework/harbor) is a directory with
+an instruction, a container and a grader. Most published agent benchmarks ship
+their tasks in this format, and its parts are the parts of an ARI task. Write a
+task this way whenever grading needs a container. A plain Python `evaluator`, as
+in the packing task above, remains the light option for small tasks.
 
-| Base task | What a candidate changes | What stays fixed |
-| --- | --- | --- |
-| `ari.bases.harbor_task_files` | Files of the Harbor tasks, such as their instructions | The solver agent and the graders |
-| `ari.bases.harbor_harness` | The program, prompts, skills and hooks that drive the solver | The Harbor tasks, their graders and the model |
+![The task directory holds task.py, run.toml, seed/ and an unchanged Harbor task. The researcher is a Harbor agent in a container built from the Harbor task's environment/. Each submission goes through the ARI controller to a new grader container, where the task's feedback script returns a score to the researcher and its sealed script writes a score to private evidence.](docs/assets/harbor-deliverable.svg)
 
-This is the whole [sum-harness](examples/sum-harness/task.py) task:
+| Part of the Harbor task | Role in ARI |
+| --- | --- |
+| `instruction.md` | The written objective. |
+| `environment/` | The container the researcher and the reviewer work in. |
+| `tests/`, or a grader image | The grader, run on every submission. |
+| `task.toml` | Resources and the grader's time limit. |
+
+This is Harbor's format, not Harbor's run. In a Harbor run the test script
+executes once, after the agent stops. Here the grader executes after every
+submission, in its own container, with ARI between the researcher and the
+grader. Harbor still starts the researcher and the reviewer.
+
+A Harbor task leaves out three things, which `task.py` adds. This is the whole
+[threshold-deliverable](examples/threshold-deliverable/task.py) task:
 
 ```python
 import autoresearch_infrastructure as ari
 
 
 def task(run):
-    return ari.bases.harbor_harness(
+    return ari.bases.harbor_deliverable(
         run,
-        harbor_tasks={"sum": "harbor-task"},
-        advice="Do not hard-code the input numbers or the expected total.",
+        harbor_task="harbor-task",
+        deliverable="/app/output",          # the directory the grader reads; a candidate is its contents
+        feedback="/tests/feedback.sh",      # scored after every submission and shown to the researcher
+        sealed="/tests/test.sh",            # scored privately; no agent and no selection step reads it
+        rules=[
+            "The deliverable is the single file `model.json`.",
+            "Choose the threshold from the data in `/app/data/train.csv`.",
+        ],
     )
 ```
 
-Point `harbor_tasks` at your own Harbor task directories, one entry for each, and
-name the solver under `[task.solver]` in the run settings. Each Harbor task's own
-grader scores the trials.
+- **The deliverable.** Harbor does not say which directory holds the solution.
+- **Two scripts.** Harbor has one test script, which gives the final score.
+  Running it on every submission would show the researcher the held-out
+  result, so you name a feedback script for that and keep the other sealed.
+  `ari sealed <dir>` prints the sealed scores after the run.
+- **Rules as a list.** `instruction.md` is one text. The reviewer judges each
+  rule separately, so the rules are listed.
+
+Three base tasks cover the common experiments on Harbor tasks:
+
+| Base task | What a candidate changes | What stays fixed |
+| --- | --- | --- |
+| `ari.bases.harbor_deliverable` | The deliverable the Harbor task asks for | The Harbor task and its grader |
+| `ari.bases.harbor_task_files` | Files of the Harbor tasks, such as their instructions | The solver agent and the graders |
+| `ari.bases.harbor_harness` | The program, prompts, skills and hooks that drive the solver | The Harbor tasks, their graders and the model |
+
+The last two evaluate a solver agent on the Harbor tasks, named under
+`[task.solver]` in the run settings. See
+[Harbor base tasks](reference.md#harbor-base-tasks).
 
 ## Examples
 
@@ -250,6 +285,7 @@ Each directory is self-contained: copy one to start your own task.
 | --- | --- | --- | --- |
 | [Curve fitting](examples/curve-fitting/README.md) | Polynomial coefficients | A Python function: error on fixed points | Optional researcher and reviewer |
 | [Packing](examples/packing/task.py) | Which items to pack | A Python function: value under a weight limit | None; a scripted demo |
+| [Threshold deliverable](examples/threshold-deliverable/README.md) | The deliverable of a Harbor task | The task's grader, with a feedback split and a sealed split | Optional researcher and reviewer |
 | [Sum instructions](examples/sum-instructions/README.md) | The instructions of a Harbor task | The task's grader, with a fixed solver | Researcher, reviewer and solver |
 | [Sum harness](examples/sum-harness/README.md) | The program and prompt that drive a solver | The grader of a fixed Harbor task | Researcher, reviewer and solver |
 

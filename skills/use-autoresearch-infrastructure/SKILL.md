@@ -100,17 +100,20 @@ Then copy the closest example directory and edit it.
 | What changes | What stays fixed | Copy | Built with |
 | --- | --- | --- | --- |
 | A configuration, data file or implementation measured by your own Python | The workload and the evaluator | [examples/curve-fitting](../../examples/curve-fitting/README.md) | `ari.Task` |
+| The deliverable a Harbor task asks for, such as an imported benchmark task | The Harbor task and its grader | [examples/threshold-deliverable](../../examples/threshold-deliverable/README.md) | `ari.bases.harbor_deliverable` |
 | Files of a Harbor task, such as its instructions | The solver and the Harbor task's grader | [examples/sum-instructions](../../examples/sum-instructions/README.md) | `ari.bases.harbor_task_files` |
 | The solver harness: its program, prompts, skills and hooks | The Harbor tasks, their graders and the model | [examples/sum-harness](../../examples/sum-harness/README.md) | `ari.bases.harbor_harness` |
 
 A "Harbor task" is Harbor's own unit: a directory with `task.toml`,
 `instruction.md`, an environment and tests. One task can evaluate many Harbor
-tasks as its cases. The two functions in `ari.bases` each return a complete
-`ari.Task` from your Harbor tasks, so a Harbor `task.py` is a few lines.
+tasks as its cases. The three functions in `ari.bases` each return a complete
+`ari.Task` from your Harbor tasks, so a Harbor `task.py` is a few lines. When
+grading needs a container, write the task as a Harbor task and use
+`ari.bases.harbor_deliverable`; keep a plain Python evaluator for small tasks.
 
 [Design a task](references/task-integration.md) explains these decisions and
 how to test a task before a search.
-[Harbor tasks](references/harbor-harness.md) covers the two functions in
+[Harbor tasks](references/harbor-harness.md) covers the three functions in
 `ari.bases`.
 
 Validity and quality are separate questions. The validity function and the reviewer decide

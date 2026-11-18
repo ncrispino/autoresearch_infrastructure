@@ -10,7 +10,12 @@ import json
 import math
 from pathlib import Path
 
-from .harbor_filesystem import immutable_image, native_agent_config, run_filesystem_agent
+from .harbor_filesystem import (
+    RESEARCHER_MAX_TIMEOUT,
+    immutable_image,
+    native_agent_config,
+    run_filesystem_agent,
+)
 
 
 def native_agent_cost(evidence):
@@ -35,7 +40,8 @@ class CodingAgent:
     """
 
     def __init__(self, *, agent, image=None, environment=None):
-        self.agent = native_agent_config(agent, default_timeout=600, researcher=True)
+        self.agent = native_agent_config(agent, default_timeout=600, researcher=True,
+                                         max_timeout=RESEARCHER_MAX_TIMEOUT)
         if (image is None) == (environment is None):
             raise ValueError("A researcher runs in either an image or a Harbor environment")
         self.image = immutable_image(image, "A researcher") if image is not None else None

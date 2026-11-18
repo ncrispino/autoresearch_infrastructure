@@ -66,7 +66,8 @@ instructions, after the task's validity function if it has one.
   run opens, before any start.
 - The researcher submits a candidate and then waits while ARI reviews and
   evaluates it. Set its timeout long enough to cover that wait. The default is
-  600 seconds and the most is 7200.
+  600 seconds and the most is 86400, for one session that makes every proposal.
+  A reviewer's most is 7200.
 - A long evaluation can also outlast the tool-call timeout of the agent's own
   client, which Harbor does not set for Codex. If the connection breaks, ARI
   still finishes and saves the candidate.

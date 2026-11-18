@@ -21,6 +21,9 @@ from .persistence import write_json
 from .tool_server import CandidateToolServer
 from .traces import capture_atif
 
+# One researcher session may make every proposal of a run, so its timeout may span a day.
+RESEARCHER_MAX_TIMEOUT = 86400
+
 
 def immutable_image(image, role: str) -> str:
     """Require an image ID or digest, so a retagged image cannot change a running study."""
@@ -29,10 +32,11 @@ def immutable_image(image, role: str) -> str:
     return image
 
 
-def native_agent_config(value, *, default_timeout, researcher=False):
+def native_agent_config(value, *, default_timeout, researcher=False, max_timeout=7200):
     """Validate a Harbor agent configuration and return a private copy.
 
     Call this before any paid start so that a bad configuration costs nothing.
+    ``max_timeout`` is the longest timeout accepted, in seconds.
     """
     from harbor.agents.factory import AgentFactory
     from harbor.models.trial.config import AgentConfig
@@ -54,9 +58,9 @@ def native_agent_config(value, *, default_timeout, researcher=False):
     for name in ("override_timeout_sec", "override_setup_timeout_sec", "max_timeout_sec"):
         timeout = getattr(agent, name)
         if timeout is not None and (
-            type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 7200
+            type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= max_timeout
         ):
-            raise ValueError(f"Native agent {name} must be positive and at most 7200 seconds")
+            raise ValueError(f"Native agent {name} must be positive and at most {max_timeout} seconds")
     if any(server.name == "autoresearch" for server in agent.mcp_servers):
         raise ValueError("The autoresearch MCP server name is reserved for the candidate recorder")
     return agent

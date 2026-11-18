@@ -8,7 +8,9 @@ task file calls one with its own Harbor tasks, starting files and instructions:
             run, harbor_tasks={"sum": "harbor-task"}, editable=["instruction.md"],
         )
 
-Paths are relative to the task file. Both read the solver from ``[task.solver]`` in the run settings and count one
+Paths are relative to the task file. ``harbor_deliverable`` grades the
+candidate itself with the Harbor task's grader and starts no solver. The other
+two read the solver from ``[task.solver]`` in the run settings and count one
 ``solver_trial`` start for each evaluation.
 """
 
@@ -17,6 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .api import Metric, Objective, Validity
+from .inputs import Environment, Memory
+from .instructions import Instructions
 from .task import Run, Task
 
 
@@ -38,6 +42,121 @@ def _solver(run: Run, example: str) -> dict:
     if not isinstance(solver, dict):
         raise ValueError(f"Add a [task.solver] table to the run settings, for example: {example}")
     return solver
+
+
+def harbor_deliverable(
+    run: Run,
+    *,
+    harbor_task: Path | str,
+    deliverable: str,
+    feedback: str,
+    sealed: str | None = "/tests/test.sh",
+    seed: Path | str = "seed",
+    grader: str | None = None,
+    rules: tuple[str, ...] | list[str] = (),
+    environment: tuple[str, ...] | list[str] = (),
+    instructions: Instructions | str | Path | None = None,
+    objective: Metric | Objective | None = None,
+    rewards: dict[Metric, str] | None = None,
+    validity=None,
+    task_environment: bool = True,
+    private: tuple[str, ...] | list[str] = (),
+    memory: Memory | None = None,
+    capabilities: tuple[str, ...] | list[str] = (),
+    network: bool = False,
+    feedback_log: bool = False,
+) -> Task:
+    """Improve the deliverable of a Harbor task, scored by that task's own grader.
+
+    Use this for a Harbor task in which the agent writes files into one
+    directory and the grader scores them. A Harbor task says neither which
+    directory is the deliverable nor which script is safe to run on every
+    submission, so the task file names both:
+
+    ``harbor_task``
+        The Harbor task directory, relative to the task file.
+    ``deliverable``
+        The container path the grader reads, such as ``/app/output``. A
+        candidate is the contents of that directory.
+    ``feedback``
+        The grader script whose reward the researcher sees and selection
+        ranks, as a path in the grader container. ``tests/`` is mounted at
+        ``/tests``.
+    ``sealed``
+        The grader script whose reward is held out: it is recorded privately
+        for every evaluated candidate and shown to no agent. The default is
+        Harbor's own ``/tests/test.sh``. Pass None for a task with no held-out
+        score.
+    ``seed``
+        The starting deliverable, a directory relative to the task file.
+    ``grader``
+        Where the scripts run: by default the task's main image; or a directory
+        in the Harbor task holding the grader's own Dockerfile; or an image
+        pinned by digest.
+
+    ``instruction.md`` is the written objective. ``rules`` and ``environment``
+    add the two lists a Harbor instruction does not separate; the reviewer
+    judges each rule, so a run with review on needs at least one. Pass
+    ``instructions`` instead to write all three yourself.
+
+    One reward becomes the metric ``reward``, higher is better. For anything
+    else pass ``objective`` and ``rewards``, a mapping from each metric to the
+    feedback reward key that supplies it.
+
+    The researcher and the reviewer each run in the task's main container,
+    built from ``environment/`` without the task's compose file, its MCP
+    servers, the grader's build directory and every path in ``private``.
+    Dockerfile ``FROM`` lines must be pinned by digest.
+    ``task_environment=False`` runs them in the ``--image`` container instead.
+
+    ``capabilities``, ``network`` and ``feedback_log`` loosen the grader
+    container; see ``HarborGraderEvaluator``.
+    """
+    from . import harbor_deliverable as deliverables
+
+    if (objective is None) != (rewards is None):
+        raise ValueError("Pass objective and rewards together: the objective ranks the metrics that rewards supply")
+    task = run.directory / harbor_task
+    state = run.output / "harbor-deliverable"
+    evaluator = deliverables.HarborGraderEvaluator(
+        task=task, deliverable=deliverable, feedback=feedback, sealed=sealed, grader=grader, state=state,
+        rewards=rewards, capabilities=capabilities, network=network, feedback_log=feedback_log,
+    )
+    harbor = None
+    if task_environment and (run.settings.researcher is not None or run.settings.reviewer is not None):
+        hidden = list(private) + ([grader] if evaluator.context is not None and grader is not None else [])
+        harbor = deliverables.researcher_environment(task, state / "researcher-environment", private=hidden)
+    if instructions is None:
+        source = task / "instruction.md"
+        if not source.is_file() or not source.read_text(encoding="utf-8").strip():
+            raise ValueError(f"No instruction at {source}. Write it, or pass instructions=")
+        instructions = Instructions(
+            objective=source.read_text(encoding="utf-8").strip(),
+            rules=tuple(rules),
+            environment=(
+                f"Where the text above names `{deliverable}`, the deliverable directory, use "
+                "`/workspace/candidate/` instead: that directory is what is graded.",
+                "Submitting is described under the file layout below. It replaces any submission tool, "
+                "time limit or submission count the text above names.",
+                "The grader runs in a separate container that you cannot reach. Its score is returned to you "
+                "after each submission.",
+                *(("You work in the task's main container, so its other paths are as the text above says. "
+                   "Only `/workspace` and `/tmp` are writable.",) if harbor is not None else ()),
+                *environment,
+            ),
+        )
+    elif rules or environment:
+        raise ValueError("Pass either instructions, or rules and environment to add to instruction.md")
+    return Task(
+        seed=seed,
+        instructions=instructions,
+        objective=objective or deliverables.REWARD,
+        evaluator=evaluator,
+        validity=validity,
+        environment=Environment(harbor=harbor if run.settings.researcher is not None else None),
+        review_environment=harbor if run.settings.reviewer is not None else None,
+        memory=memory or Memory(),
+    )
 
 
 def harbor_task_files(
