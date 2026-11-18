@@ -184,6 +184,7 @@ class Start:
     and ``conversations`` names the earlier starts whose conversations are
     mounted as files. ``submissions`` is how many candidates this session may
     record: one, a larger number, or ``None`` for no limit of its own.
+    ``context`` says whether the task has context files, mounted at ``/context``.
     """
 
     number: int
@@ -195,6 +196,7 @@ class Start:
     log: bool = False
     summary: bool = False
     submissions: int | None = 1
+    context: bool = True
 
 
 def present(inputs: ResearcherInputs, start: Start) -> str:

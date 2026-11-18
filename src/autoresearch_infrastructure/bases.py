@@ -48,10 +48,10 @@ def harbor_deliverable(
     run: Run,
     *,
     harbor_task: Path | str,
-    deliverable: str,
     feedback: str,
     sealed: str | None = "/tests/test.sh",
-    seed: Path | str = "seed",
+    deliverable: str = "/workspace/candidate",
+    seed: Path | str | None = None,
     grader: str | None = None,
     rules: tuple[str, ...] | list[str] = (),
     environment: tuple[str, ...] | list[str] = (),
@@ -71,15 +71,12 @@ def harbor_deliverable(
     """Improve the deliverable of a Harbor task, scored by that task's own grader.
 
     Use this for a Harbor task in which the agent writes files into one
-    directory and the grader scores them. A Harbor task says neither which
-    directory is the deliverable nor which script is safe to run on every
-    submission, so the task file names both:
+    directory and the grader scores them. A candidate is the contents of that
+    directory. A Harbor task does not say which script is safe to run on every
+    submission, so the task file names it:
 
     ``harbor_task``
         The Harbor task directory, relative to the task file.
-    ``deliverable``
-        The container path the grader reads, such as ``/app/output``. A
-        candidate is the contents of that directory.
     ``feedback``
         The grader script whose reward the researcher sees and selection
         ranks, as a path in the grader container. ``tests/`` is mounted at
@@ -89,10 +86,18 @@ def harbor_deliverable(
         for every evaluated candidate and shown to no agent. The default is
         Harbor's own ``/tests/test.sh``. Pass None for a task with no held-out
         score.
+    ``deliverable``
+        The container path the grader reads the candidate from. A task written
+        for ARI uses the default, ``/workspace/candidate``: the researcher
+        edits that same path, so the instruction is true as written here and
+        under ``harbor run``. For a task from elsewhere, name its own path,
+        such as ``/app/output``; the researcher is then told to use
+        ``/workspace/candidate/`` in its place.
     ``seed``
-        The starting deliverable, a directory relative to the task file. When
-        the Harbor task ships one, name the directory its Dockerfile copies to
-        ``deliverable``, such as ``harbor-task/environment/output``.
+        The starting deliverable, a directory relative to the task file. The
+        default is ``environment/candidate`` in the Harbor task, the directory
+        its Dockerfile copies to ``deliverable``, or else ``seed/`` beside the
+        task file.
     ``grader``
         Where the scripts run: by default the task's main image; or a directory
         in the Harbor task holding the grader's own Dockerfile; or an image
@@ -131,6 +136,11 @@ def harbor_deliverable(
         raise ValueError("Pass objective and rewards together: the objective ranks the metrics that rewards supply")
     task = run.directory / harbor_task
     state = run.output / "harbor-deliverable"
+    if seed is None:
+        shipped = Path(harbor_task) / "environment/candidate"
+        seed = shipped if (run.directory / shipped).is_dir() else "seed"
+    if task_environment:
+        _free_workspace(task, deliverable)
     evaluator = deliverables.HarborGraderEvaluator(
         task=task, deliverable=deliverable, feedback=feedback, sealed=sealed, grader=grader, state=state,
         rewards=rewards, capabilities=capabilities, network=network, feedback_log=feedback_log,
@@ -149,8 +159,9 @@ def harbor_deliverable(
             objective=source.read_text(encoding="utf-8").strip(),
             rules=tuple(rules),
             environment=(
-                f"Where the text above names `{deliverable}`, the deliverable directory, use "
-                "`/workspace/candidate/` instead: that directory is what is graded.",
+                *((f"Where the text above names `{deliverable}`, the deliverable directory, use "
+                   "`/workspace/candidate/` instead: that directory is what is graded.",)
+                  if deliverable.rstrip("/") != _CANDIDATE else ()),
                 "Submitting is described under the file layout below. It replaces any submission tool, "
                 "time limit or submission count the text above names.",
                 "The grader runs in a separate container that you cannot reach. Its score is returned to you "
@@ -173,6 +184,25 @@ def harbor_deliverable(
         review_environment=harbor if run.settings.reviewer is not None else None,
         memory=memory or Memory(),
     )
+
+
+_CANDIDATE = "/workspace/candidate"
+
+
+def _free_workspace(task: Path, deliverable: str) -> None:
+    """Refuse a Harbor task that keeps its own files where ARI mounts the researcher's workspace."""
+    import tomllib
+
+    manifest = task / "task.toml"
+    workdir = (tomllib.loads(manifest.read_text(encoding="utf-8")).get("environment") or {}).get(
+        "workdir", "") if manifest.is_file() else ""
+    for label, path in (("[environment] workdir", workdir), ("deliverable", deliverable)):
+        path = str(path).rstrip("/")
+        if path != _CANDIDATE and (path == "/workspace" or path.startswith("/workspace/")):
+            raise ValueError(
+                f"The Harbor task's {label} is {path}, but ARI mounts the researcher's workspace over "
+                "/workspace, which would hide the task's files there. Use /workspace/candidate for the "
+                "deliverable and another directory for everything else, or pass task_environment=False")
 
 
 def harbor_task_files(

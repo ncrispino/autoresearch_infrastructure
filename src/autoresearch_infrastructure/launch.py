@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -565,6 +565,7 @@ def run_researchers(run: OpenRun) -> dict:
                 return following
 
             start, history, manifest = view(parent)
+            start = replace(start, context=any(run.context.iterdir()))
             try:
                 prompt = present_start(inputs, start)
                 if not isinstance(prompt, str) or not prompt.strip():

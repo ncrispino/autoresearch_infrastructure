@@ -3,8 +3,7 @@
 | Path | What is here |
 | --- | --- |
 | `/workspace/candidate/` | Your editable solution, copied from `$parent_id`. Only this directory is submitted. |
-| `/context/` | Read-only task material. |
-| `/history/index.json` | Read-only summary of earlier candidates: each idea, its validity verdict, its scores, and which candidate is currently selected. Start here. |
+$context_row| `/history/index.json` | Read-only summary of earlier candidates: each idea, its validity verdict, its scores, and which candidate is currently selected. Start here. |
 | `/history/candidates/<id>/` | One earlier candidate: its files in `snapshot/`, its changes in `diff.patch`, its review in `validity/`, and its results in `evaluations/`. |
 | `/tmp/` | Scratch space. Nothing here is submitted. |$memory_rows
 
@@ -15,7 +14,7 @@ under `attempts[].paths`. Those paths are relative to `/history`. Use the result
 and native trajectory paths linked in `/history/index.json` to see what happened
 in a trial. A score alone does not explain its cause.
 
-`/context` and `/history` are mounted read-only. The evaluator, the validity
+$readonly mounted read-only. The evaluator, the validity
 rules and the budget run outside your container.
 
 ## Submit one candidate

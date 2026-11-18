@@ -1,4 +1,4 @@
-Improve `/app/output/coefficients.json` so that its polynomial fits the thirteen
+Improve `/workspace/candidate/coefficients.json` so that its polynomial fits the thirteen
 `(x, y)` observations in `/app/data/observations.json` more closely.
 
 The file holds `{"coefficients": [...]}` in ascending powers: `[c0, c1, c2]`

@@ -43,12 +43,14 @@ directory and a grader scores them. The Harbor task directory is used as it is.
 
 ![The files of a Harbor deliverable task and where each one is used at run time.](../../../docs/assets/harbor-deliverable.svg)
 
-A Harbor task leaves out three things that `task.py` must name. Find each one
-in the source task before writing anything:
+A task you write for ARI keeps its deliverable in `/workspace/candidate` and
+its starting files in `environment/candidate/`, and `task.py` names neither. A
+task from elsewhere is not edited: find each of these in it before writing
+anything.
 
 | `task.py` names | How to find it in the source task |
 | --- | --- |
-| `deliverable` | The directory the instruction tells the agent to write into, such as `/app/output`. Pass `seed` the directory in the Harbor task that its Dockerfile copies there; use a `seed/` of your own only if the task ships no starting files. |
+| `deliverable` | The directory the instruction tells the agent to write into, such as `/app/output`. Pass `seed` the directory in the task that its Dockerfile copies there, or a `seed/` of your own if the task ships no starting files. A task that keeps other files under `/workspace` is refused, because ARI mounts the researcher's workspace there. |
 | `feedback` | A grader script that scores a split the agent may be shown. Many benchmarks have one for intermediate submissions. If the task has only `tests/test.sh`, divide its hidden instances into two splits once and write a script for each. |
 | `sealed` | The script for the final, hidden split. Never pass the same script as `feedback`. |
 | `rules` | The sentences of `instruction.md` that a candidate could break and someone has to judge. Add your own if the source has none, and say so in the task's README. |

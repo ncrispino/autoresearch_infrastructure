@@ -127,9 +127,10 @@ def test_a_failed_sealed_script_is_recorded_privately_and_does_not_change_the_me
 def test_instruction_md_becomes_the_objective_with_the_added_rules(tmp_path):
     run = open_copy(tmp_path, "reviewer = false\n")
     plan = json.loads((tmp_path / "run/plan.json").read_text())["instructions"]
-    assert "Write `/app/output/model.json` holding one JSON object" in plan
+    assert "Write `/workspace/candidate/model.json` holding one JSON object" in plan
     assert "- The deliverable is the single file `model.json`." in plan
-    assert "use `/workspace/candidate/` instead" in plan and "- Score: `reward`. Higher is better." in plan
+    assert "- Score: `reward`. Higher is better." in plan and "- Starting files: `model.json`." in plan
+    assert "instead" not in plan  # the task already names the path the researcher edits
     assert run.task.environment.harbor is None  # no researcher is configured, so nothing is derived
     assert not (tmp_path / "run/harbor-deliverable").exists()  # and nothing was built
 
@@ -304,3 +305,58 @@ def test_each_case_is_graded_separately_and_feedback_artifacts_reach_the_researc
         assert len(list((root / "private").rglob("sealed/artifacts/plot.txt"))) == 2
         assert not [path for path in (tmp_path / settings).rglob("link")]
         assert sorted(entry["case"] for entry in sealed_rewards(tmp_path / settings)) == ["large", "small"]
+
+
+def imported(tmp_path, call, **files):
+    """A task directory around a Harbor task from elsewhere, opened with no agents."""
+    inside = {name: text for name, text in files.items() if name.startswith("harbor-task/")}
+    harbor_task(tmp_path / "task/harbor-task", **{name[len("harbor-task/"):]: text for name, text in inside.items()})
+    beside = {
+        "task.py": ("import autoresearch_infrastructure as ari\n\n\n"
+                    f"def task(run):\n    return ari.bases.harbor_deliverable(run, harbor_task='harbor-task', {call})\n"),
+        "settings.toml": "reviewer = false\n",
+        **{name: text for name, text in files.items() if name not in inside},
+    }
+    for name, text in beside.items():
+        (tmp_path / "task" / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "task" / name).write_text(text)
+    return launch.open_run(tmp_path / "task", tmp_path / "task/settings.toml", tmp_path / "run", None)
+
+
+def test_a_task_from_elsewhere_keeps_its_own_deliverable_path_and_the_researcher_is_told_the_translation(tmp_path):
+    run = imported(tmp_path, "deliverable='/app/output', feedback='/tests/feedback.sh'",
+                   **{"seed/answer.txt": "x\n"})
+    assert "Where the text above names `/app/output`, the deliverable directory, use `/workspace/candidate/`" in (
+        run.inputs.specification())
+    assert run.task.evaluator.deliverable.as_posix() == "/app/output"
+
+
+def test_the_starting_deliverable_defaults_to_the_directory_the_task_ships(tmp_path):
+    run = imported(tmp_path, "feedback='/tests/feedback.sh'",
+                   **{"harbor-task/environment/candidate/answer.txt": "shipped\n", "seed/answer.txt": "beside\n"})
+    assert Path(run.task.seed, "answer.txt").read_text() == "shipped\n"
+    assert run.task.evaluator.deliverable.as_posix() == "/workspace/candidate"
+
+
+@pytest.mark.parametrize("call, toml, named", [
+    ("feedback='/tests/feedback.sh'", '[environment]\nworkdir = "/workspace"\n', "workdir is /workspace"),
+    ("feedback='/tests/feedback.sh', deliverable='/workspace/out'", "[environment]\n", "deliverable is /workspace/out"),
+])
+def test_a_task_that_keeps_files_under_the_researchers_workspace_is_refused(tmp_path, call, toml, named):
+    files = {"seed/answer.txt": "x\n", "harbor-task/task.toml": toml}
+    with pytest.raises(ValueError, match=named):
+        imported(tmp_path, call, **files)
+    run = imported(tmp_path / "host", call + ", task_environment=False", **files)  # agents in --image: no clash
+    assert run.task.environment.harbor is None
+
+
+def test_a_task_without_context_files_is_told_of_no_context_directory():
+    from autoresearch_infrastructure.search import researcher_prompt
+
+    start = ari.Start(1, "candidate-0001", 1)
+    shown = researcher_prompt("Goal", parent_id="candidate-0001", repeats=1, start=start)
+    hidden = researcher_prompt("Goal", parent_id="candidate-0001", repeats=1,
+                               start=ari.Start(1, "candidate-0001", 1, context=False))
+    assert "| `/context/` | Read-only task material. |" in shown
+    assert "`/context` and `/history` are mounted read-only." in shown
+    assert "/context" not in hidden and "`/history` is mounted read-only." in hidden and "$" not in hidden

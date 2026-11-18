@@ -28,7 +28,7 @@ their tasks in this format, and its parts are the parts of an ARI task. You
 write the problem as a Harbor task, or take one that exists, and add a short
 `task.py` beside it.
 
-![The task directory holds task.py, run.toml and an unchanged Harbor task, whose environment/output/ is the starting deliverable. The researcher is a Harbor agent in a container built from the Harbor task's environment/. Each submission goes through the ARI controller to a new grader container, where the task's feedback script returns a score to the researcher and its sealed script writes a score to private evidence.](docs/assets/harbor-deliverable.svg)
+![The task directory holds task.py, run.toml and an unchanged Harbor task, whose environment/candidate/ is the starting deliverable. The researcher is a Harbor agent in a container built from the Harbor task's environment/. Each submission goes through the ARI controller to a new grader container, where the task's feedback script returns a score to the researcher and its sealed script writes a score to private evidence.](docs/assets/harbor-deliverable.svg)
 
 | Part of the Harbor task | Role in ARI |
 | --- | --- |
@@ -42,7 +42,13 @@ executes once, after the agent stops. Here the grader executes after every
 submission, in its own container, with ARI between the researcher and the
 grader. Harbor still starts the researcher and the reviewer.
 
-A Harbor task leaves out a few things, which `task.py` adds. This is the whole
+A Harbor task written for ARI follows one convention: the deliverable lives in
+`/workspace/candidate`. The instruction names that path, the Dockerfile copies
+the starting files there from `environment/candidate/`, and the grader reads
+it. The researcher edits the same path, so the task reads the same under ARI
+and under `harbor run`.
+
+A Harbor task leaves out two things, which `task.py` adds. This is the whole
 [threshold-deliverable](examples/threshold-deliverable/task.py) task:
 
 ```python
@@ -53,8 +59,6 @@ def task(run):
     return ari.bases.harbor_deliverable(
         run,
         harbor_task="harbor-task",
-        seed="harbor-task/environment/output",   # the starting deliverable, as the task's image ships it
-        deliverable="/app/output",          # the directory the grader reads; a candidate is its contents
         feedback="/tests/feedback.sh",      # scored after every submission and shown to the researcher
         sealed="/tests/test.sh",            # scored privately; no agent and no selection step reads it
         rules=[
@@ -64,9 +68,6 @@ def task(run):
     )
 ```
 
-- **The deliverable.** Harbor does not say which directory holds the solution,
-  or where its starting files are. Here the image copies `environment/output/`
-  to `/app/output`, and `seed` names that same directory.
 - **Two scripts.** Harbor has one test script, which gives the final score.
   Running it on every submission would show the researcher the held-out
   result, so you name a feedback script for that and keep the other sealed.
@@ -74,6 +75,11 @@ def task(run):
   nothing held out passes its one script as `feedback` and `sealed=None`.
 - **Rules as a list.** `instruction.md` is one text. The reviewer judges each
   rule separately, so the rules are listed.
+
+A Harbor task from elsewhere, such as a published benchmark task, is used
+without editing its files: pass `deliverable=` with the path its instruction
+names, such as `/app/output`. The grader sees the candidate at that path, and
+the researcher is told to use `/workspace/candidate/` in its place.
 
 `task.py` can also name the metrics when the grader reports several, a
 `validity` function for rules that code can decide exactly, and `cases` to
@@ -188,7 +194,7 @@ What it writes is a Harbor task directory like the one in the figure above:
 | --- | --- | --- |
 | Objective | `instruction.md` | What to change and what should get better. |
 | Rules | `rules=[...]` in `task.py` | What a candidate must and must not do. The reviewer judges each rule separately. |
-| Starting files | A directory in `environment/` | The unimproved deliverable. |
+| Starting files | `environment/candidate/` | The unimproved deliverable, copied by the Dockerfile to `/workspace/candidate`. |
 | Grader | A script in `tests/` | Reads the deliverable and writes a reward to `/logs/verifier/reward.txt` or `reward.json`. |
 
 ARI lays the instructions out the same way for every task and adds what the

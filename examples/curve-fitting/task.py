@@ -1,7 +1,7 @@
 """Fit a polynomial to thirteen fixed, noisy observations.
 
 The task is the Harbor task in ``harbor-task/``. A candidate is the contents of
-its ``/app/output``: the one file ``coefficients.json``. The Harbor task's own
+its ``/workspace/candidate``: the one file ``coefficients.json``. The Harbor task's own
 grader measures the error on the observations and saves a plot of the fit.
 """
 
@@ -44,8 +44,6 @@ def task(run):
     return ari.bases.harbor_deliverable(
         run,
         harbor_task="harbor-task",
-        seed="harbor-task/environment/output",   # the starting deliverable, as the task's image ships it
-        deliverable="/app/output",
         feedback="/tests/test.sh",               # the task's one grader script
         sealed=None,                             # nothing is held out: the observations are public
         rules=RULES,

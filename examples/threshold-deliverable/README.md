@@ -5,13 +5,13 @@ this example as the model for importing a benchmark task in which the agent
 writes files into one directory and a grader scores them.
 
 The Harbor task in [harbor-task/](harbor-task/instruction.md) asks for one file,
-`/app/output/model.json`, holding a threshold that separates two classes of
+`/workspace/candidate/model.json`, holding a threshold that separates two classes of
 points. Its grader reports the accuracy on points the agent cannot read.
 
 | Part | Definition |
 | --- | --- |
-| Candidate | The contents of `/app/output`: here the one file `model.json`. |
-| Baseline | [harbor-task/environment/output/model.json](harbor-task/environment/output/model.json), a threshold of 0.2. The task's Dockerfile copies the same directory to `/app/output`, so the starting deliverable exists once. |
+| Candidate | The contents of `/workspace/candidate`: here the one file `model.json`. |
+| Baseline | [harbor-task/environment/candidate/model.json](harbor-task/environment/candidate/model.json), a threshold of 0.2. The task's Dockerfile copies the same directory to `/workspace/candidate`, so the starting deliverable exists once. |
 | Objective | Maximize `reward`: the accuracy from `tests/feedback.sh`, on 50 hidden points. |
 | Sealed score | The accuracy from `tests/test.sh`, on 200 other hidden points. No agent sees it and selection does not use it. |
 | Rules | Two, written in [task.py](task.py). A Harbor instruction does not list rules, and the reviewer needs them. |
@@ -26,14 +26,15 @@ researcher improves a real benchmark task.
 | --- | --- |
 | [task.py](task.py) | The task: one call to `ari.bases.harbor_deliverable`. |
 | [harbor-task/](harbor-task/task.toml) | The Harbor task, laid out as Harbor expects, plus one added script. |
-| [harbor-task/environment/](harbor-task/environment/Dockerfile) | The task's main container, with the training data and, in `output/`, the starting deliverable. The researcher works in it. |
+| [harbor-task/environment/](harbor-task/environment/Dockerfile) | The task's main container, with the training data and, in `candidate/`, the starting deliverable. The researcher works in it. |
 | [harbor-task/tests/](harbor-task/tests/grade.py) | The grader and both hidden splits. `test.sh` is Harbor's own test script and the sealed score. `feedback.sh` is the script added for ARI. |
 | [local.toml](local.toml) | Run settings without agents. |
 | [run.toml](run.toml) | Run settings with a researcher and a reviewer. |
 
-The Harbor task still runs with `harbor run` as it is. ARI needs three things
-it does not say, and `task.py` supplies them: which directory is the
-deliverable, which script may run after every submission, and the rules.
+The Harbor task still runs with `harbor run` as it is. ARI needs two things it
+does not say, and `task.py` supplies them: which script may run after every
+submission, and the rules. The deliverable is `/workspace/candidate`, the
+convention for a task written for ARI, so `task.py` does not name it.
 
 ## Grade your own edits
 

@@ -1,4 +1,4 @@
-"""Score /app/output/model.json on one hidden split and write Harbor's reward file."""
+"""Score /workspace/candidate/model.json on one hidden split and write Harbor's reward file."""
 
 import csv
 import json
@@ -8,7 +8,7 @@ from pathlib import Path
 split = sys.argv[1]
 accuracy = 0.0
 try:
-    model = json.loads(Path("/app/output/model.json").read_text())
+    model = json.loads(Path("/workspace/candidate/model.json").read_text())
     threshold = model["threshold"]
     if set(model) == {"threshold"} and type(threshold) in (int, float) and 0 <= threshold <= 1:
         with open(f"/tests/{split}.csv", newline="") as handle:

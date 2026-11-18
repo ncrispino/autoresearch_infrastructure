@@ -70,7 +70,7 @@ def fixture_agent(monkeypatch, *, fail_on=()):
             seen.append(SimpleNamespace(
                 prompt=prompt, files=files, index=json.loads((Path(history) / "index.json").read_text()),
                 workspace=sorted(p.relative_to(workspace).as_posix() for p in workspace.rglob("*")),
-                image=self.image, environment=self.environment,
+                image=self.image, environment=self.environment, mounts=sorted(readonly.values()),
             ))
             evidence.mkdir(parents=True)
             (evidence / "trajectory.json").write_text(json.dumps({"start": len(seen)}))
@@ -111,8 +111,10 @@ def test_default_inputs_keep_the_standard_prompt_and_record_each_start(example, 
     standard = plan["instructions"].rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(
         parent_id="candidate-0001", repeats=1, memory_rows="",
         parent_evidence="Read its evidence at `/history/candidates/candidate-0001/` before editing.",
-        after_recording=ONE_SUBMISSION)
+        after_recording=ONE_SUBMISSION,
+        context_row="| `/context/` | Read-only task material. |\n", readonly="`/context` and `/history` are")
     assert "Stop\n  there, even if it is invalid" in standard and "$" not in standard
+    assert seen[0].mounts == ["/context", "/history"]  # this task passes a context file
     assert seen[0].prompt == standard
     assert "candidates/candidate-0001/snapshot/value.json" in seen[0].files
     records = inputs_records(example.output)

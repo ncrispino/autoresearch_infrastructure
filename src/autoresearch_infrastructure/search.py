@@ -42,8 +42,11 @@ def researcher_prompt(goal: str, *, parent_id: str, repeats: int, start=None) ->
             rows += ("\n| `/history/conversations/` | The conversations of earlier researchers in this run, "
                      "as ATIF JSON, oldest first. |")
     submissions = 1 if start is None else start.submissions
+    context = start is None or start.context
     return goal.rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(
         parent_id=parent_id, repeats=repeats, memory_rows=rows, parent_evidence=evidence,
+        context_row="| `/context/` | Read-only task material. |\n" if context else "",
+        readonly="`/context` and `/history` are" if context else "`/history` is",
         after_recording=_ONE_SUBMISSION if submissions == 1 else _SEVERAL_SUBMISSIONS.format(
             limit="as many candidates as the run's budget allows" if submissions is None
             else f"up to {submissions} candidates"),
@@ -187,7 +190,9 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
                 prompt,
                 workspace=research.root / "workspace",
                 evidence=evidence,
-                readonly={context: "/context", (history or research.root / "history"): "/history"},
+                # A task with no context files gets no /context, so the file table lists only what exists.
+                readonly={**({context: "/context"} if any(Path(context).iterdir()) else {}),
+                          (history or research.root / "history"): "/history"},
                 recorder=recorder,
                 jobs_root=research.output / "harbor-jobs",
             )

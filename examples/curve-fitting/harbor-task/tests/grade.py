@@ -1,4 +1,4 @@
-"""Measure /app/output/coefficients.json on the observations.
+"""Measure /workspace/candidate/coefficients.json on the observations.
 
 Writes Harbor's reward file with three rewards, and two artifacts: a plot of the
 fit and every residual.
@@ -52,7 +52,7 @@ polynomial prediction. Root mean squared error is measured on these same observa
 <text x="440" y="394" font-size="14">Candidate prediction</text></g></svg>'''
 
 
-coefficients = json.loads(Path("/app/output/coefficients.json").read_text())["coefficients"]
+coefficients = json.loads(Path("/workspace/candidate/coefficients.json").read_text())["coefficients"]
 residuals = [{"x": x, "observed": y, "predicted": predict(coefficients, x),
               "residual": predict(coefficients, x) - y} for x, y in OBSERVATIONS]
 rmse = math.sqrt(mean(row["residual"] ** 2 for row in residuals))

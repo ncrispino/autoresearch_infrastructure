@@ -67,10 +67,10 @@ and a grader, and a short `task.py` beside it that calls
 
 | Part | Where it goes | Write down |
 | --- | --- | --- |
-| Objective | `instruction.md` | Which files change, what form they take, which number should move and how it is measured. |
-| Starting files | A directory in `environment/`, copied by the Dockerfile to the deliverable path, and named as `seed` | The unimproved deliverable. Unchanged, it is the baseline. |
+| Objective | `instruction.md` | Which files in `/workspace/candidate` change, what form they take, which number should move and how it is measured. |
+| Starting files | `environment/candidate/`, copied by the Dockerfile to `/workspace/candidate` | The unimproved deliverable. Unchanged, it is the baseline. |
 | Container | `environment/Dockerfile` | What the researcher needs beside the deliverable: data, tools. Pin `FROM` by digest. Nothing of the grader. |
-| Grader | A script in `tests/` | It reads the deliverable, and writes one number to `/logs/verifier/reward.txt` or several to `reward.json`. Name every fixed input it uses. |
+| Grader | A script in `tests/` | It reads `/workspace/candidate`, and writes one number to `/logs/verifier/reward.txt` or several to `reward.json`. Name every fixed input it uses. |
 | Held-out score | A second script in `tests/` | Only if some data must stay hidden from the researcher. Then `feedback` scores the public split and `sealed` the hidden one. Otherwise pass the one script as `feedback` and `sealed=None`. |
 | Rules | `rules=[...]` in `task.py` | Everything a candidate must and must not do; the reviewer checks each one separately. |
 | Metrics | `objective` and `rewards` in `task.py` | Only when the grader writes more than one reward: which one ranks candidates and its direction. |

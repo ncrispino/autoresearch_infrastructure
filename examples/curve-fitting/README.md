@@ -6,8 +6,8 @@ out. Copy it to start your own.
 
 | Part | Definition |
 | --- | --- |
-| Candidate | The contents of the Harbor task's `/app/output`: `coefficients.json`, holding `{"coefficients": [c0, c1, c2]}` for `y = c0 + c1*x + c2*x²`. A shorter list is a line or a constant. |
-| Baseline | `[0.0]`, which predicts zero everywhere. See [harbor-task/environment/output/](harbor-task/environment/output/coefficients.json). |
+| Candidate | The contents of the Harbor task's `/workspace/candidate`: `coefficients.json`, holding `{"coefficients": [c0, c1, c2]}` for `y = c0 + c1*x + c2*x²`. A shorter list is a line or a constant. |
+| Baseline | `[0.0]`, which predicts zero everywhere. See [harbor-task/environment/candidate/](harbor-task/environment/candidate/coefficients.json). |
 | Objective | Minimize root mean squared error (RMSE) on the thirteen observations. |
 | Other metrics | Maximum absolute error and the number of coefficients. They are recorded and do not affect selection. |
 | Rules | Only `coefficients.json`, with one to three finite numbers between -10 and 10. |
@@ -23,7 +23,7 @@ observations are noisy, so the best quadratic does not reach zero error.
 | --- | --- |
 | [task.py](task.py) | One call to `ari.bases.harbor_deliverable`, with the metrics, the rules and a validity function. |
 | [harbor-task/instruction.md](harbor-task/instruction.md) | The objective the researcher reads. |
-| [harbor-task/environment/](harbor-task/environment/Dockerfile) | The task's container: Python, the observations, and the starting `output/coefficients.json`. |
+| [harbor-task/environment/](harbor-task/environment/Dockerfile) | The task's container: Python, the observations, and the starting `candidate/coefficients.json`. |
 | [harbor-task/tests/](harbor-task/tests/grade.py) | The grader. `test.sh` runs `grade.py`, which writes three rewards, a plot and the residuals. |
 | [harbor-task/solution/](harbor-task/solution/solve.sh) | A reference answer, the least-squares quadratic. ARI does not use it. |
 | [local.toml](local.toml) | Run settings with no agents and review turned off: five candidates, four evaluations. |

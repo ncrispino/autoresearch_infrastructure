@@ -671,8 +671,6 @@ def task(run):
     return ari.bases.harbor_deliverable(
         run,
         harbor_task="harbor-task",
-        seed="harbor-task/environment/output",
-        deliverable="/app/output",
         feedback="/tests/feedback.sh",
         sealed="/tests/test.sh",
         rules=["The deliverable is the single file `model.json`."],
@@ -682,10 +680,10 @@ def task(run):
 | Argument | Meaning |
 | --- | --- |
 | `harbor_task` | The Harbor task directory. |
-| `deliverable` | The container path the grader reads, such as `/app/output`. A candidate is the contents of that directory. |
+| `deliverable` | The container path the grader reads the candidate from. The default is `/workspace/candidate`, the convention for a task written for ARI: the researcher edits that same path, so the instruction is true as written. For a task from elsewhere, pass its own path, such as `/app/output`. |
 | `feedback` | The grader script whose reward the researcher sees and selection ranks: a path in the grader container. |
 | `sealed` | The grader script whose reward is held out. The default is Harbor's `/tests/test.sh`. `None` means the task has no held-out score. |
-| `seed` | The starting deliverable, a directory relative to the task file. Point it inside the Harbor task when the task ships one, at the directory its Dockerfile copies to `deliverable`, so the files exist once. The default is `seed/` beside the task file, for a starter of your own. A starter that the Dockerfile generates during the build is not read from the image: copy it out once. |
+| `seed` | The starting deliverable, a directory relative to the task file. The default is `environment/candidate` in the Harbor task, the directory its Dockerfile copies to `deliverable`, so the files exist once. Without that directory it is `seed/` beside the task file. A starter that a Dockerfile generates during the build is not read from the image: copy it out once. |
 | `grader` | Where the scripts run. The default is the task's main image. A directory in the Harbor task that holds the grader's own Dockerfile, such as `"environment/grader"`, is built instead. An image pinned by digest is used as it is. |
 | `rules`, `environment` | Lists added to `instruction.md`, which becomes the written objective. Pass `instructions` instead to write all three parts yourself. |
 | `objective`, `rewards` | The default objective is the metric `reward`, higher is better, read from the feedback script's single reward. For other rewards, pass an objective and `rewards={METRIC: "reward_key"}` together. |
@@ -747,9 +745,13 @@ Terminus-2. Build an image from the task's own that adds it, and write
 `image = "sha256:..."` under `[task]` in the run settings. The agents then run
 in that image. The grader still uses the task's own image.
 
-The instructions tell the researcher that the deliverable directory is
-`/workspace/candidate/` and that `record_candidate` replaces the task's own
-submission tool. Review needs at least one rule, which a Harbor instruction
+The researcher always edits `/workspace/candidate/`. When `deliverable` is
+another path, the instructions say to use `/workspace/candidate/` in its place.
+They also say that `record_candidate` replaces the task's own submission tool.
+ARI mounts the researcher's workspace over `/workspace`, which would hide
+anything else a task's image keeps there, so a task whose `workdir` or
+`deliverable` is under `/workspace`, other than `/workspace/candidate`, is
+refused unless `task_environment=False`. Review needs at least one rule, which a Harbor instruction
 does not list: pass `rules`, or write `reviewer = false`.
 
 See the [curve-fitting example](examples/curve-fitting/README.md), which has
