@@ -663,6 +663,7 @@ def task(run):
     return ari.bases.harbor_deliverable(
         run,
         harbor_task="harbor-task",
+        seed="harbor-task/environment/output",
         deliverable="/app/output",
         feedback="/tests/feedback.sh",
         sealed="/tests/test.sh",
@@ -676,7 +677,7 @@ def task(run):
 | `deliverable` | The container path the grader reads, such as `/app/output`. A candidate is the contents of that directory. |
 | `feedback` | The grader script whose reward the researcher sees and selection ranks: a path in the grader container. |
 | `sealed` | The grader script whose reward is held out. The default is Harbor's `/tests/test.sh`. `None` means the task has no held-out score. |
-| `seed` | The starting deliverable. The default is `seed/` beside the task file. |
+| `seed` | The starting deliverable, a directory relative to the task file. Point it inside the Harbor task when the task ships one, at the directory its Dockerfile copies to `deliverable`, so the files exist once. The default is `seed/` beside the task file, for a starter of your own. A starter that the Dockerfile generates during the build is not read from the image: copy it out once. |
 | `grader` | Where the scripts run. The default is the task's main image. A directory in the Harbor task that holds the grader's own Dockerfile, such as `"environment/grader"`, is built instead. An image pinned by digest is used as it is. |
 | `rules`, `environment` | Lists added to `instruction.md`, which becomes the written objective. Pass `instructions` instead to write all three parts yourself. |
 | `objective`, `rewards` | The default objective is the metric `reward`, higher is better, read from the feedback script's single reward. For other rewards, pass an objective and `rewards={METRIC: "reward_key"}` together. |

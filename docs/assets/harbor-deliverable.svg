@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1152" height="744" viewBox="0 0 1152 744" role="img" aria-labelledby="title description">
   <title id="title">A Harbor task as an ARI task: the files you set up and where each one is used</title>
-  <desc id="description">On the left, the task directory: task.py, run.toml, seed/ and an unchanged Harbor task directory holding instruction.md, task.toml, environment/, tests/ with feedback.sh and test.sh, and solution/. On the right, what runs. The researcher is a Harbor agent in a container built from environment/ alone; it edits /workspace/candidate/, which starts as seed/, and reads instruction.md and your rules as its objective. It submits with record_candidate to the ARI controller, which saves the candidate, has the reviewer judge each rule, and starts the grader. The grader is a new container for every submission, started by ARI and not by Harbor's verifier; the saved candidate is mounted read-only at the deliverable path and tests/ at /tests. The feedback script's reward goes back to the researcher and ranks candidates. The sealed script's reward goes only to private evidence. task.py names what a Harbor task leaves out: the deliverable path, the two scripts and the rules.</desc>
+  <desc id="description">On the left, the task directory: task.py, run.toml and an unchanged Harbor task directory holding instruction.md, task.toml, environment/ with its Dockerfile and output/, tests/ with feedback.sh and test.sh, and solution/. On the right, what runs. The researcher is a Harbor agent in a container built from environment/ alone; it edits /workspace/candidate/, which starts as the task's environment/output/, and reads instruction.md and your rules as its objective. It submits with record_candidate to the ARI controller, which saves the candidate, has the reviewer judge each rule, and starts the grader. The grader is a new container for every submission, started by ARI and not by Harbor's verifier; the saved candidate is mounted read-only at the deliverable path and tests/ at /tests. The feedback script's reward goes back to the researcher and ranks candidates. The sealed script's reward goes only to private evidence. task.py names what a Harbor task leaves out: the starting deliverable's directory, the deliverable path, the two scripts and the rules.</desc>
   <style>
     :root { --bg: #f5f7fa; --panel: #fff; --ink: #172a40; --muted: #52677e; --line: #cfd8e3; --accent: #275ed2; --tint: #eaf0ff; --code: #e9eef4; }
     @media (prefers-color-scheme: dark) {
@@ -29,16 +29,16 @@
     <rect x="32" y="32" width="400" height="372" rx="12" class="panel"/>
     <text x="52" y="62" class="eyebrow">THE FILES YOU SET UP</text>
     <text x="52" y="84" class="mono" font-weight="650">my-task/</text>
-    <path d="M57 92V364M75 256V276M75 304V348" class="guide"/>
+    <path d="M57 92V364M75 232V276M75 304V348" class="guide"/>
     <text class="mono">
       <tspan x="70" y="104">task.py</tspan><tspan x="236" class="note">what Harbor leaves out</tspan>
       <tspan x="70" y="128">run.toml</tspan><tspan x="236" class="note">the agents and the budget</tspan>
-      <tspan x="70" y="152">seed/</tspan><tspan x="236" class="note">the starting deliverable</tspan>
-      <tspan x="70" y="176">harbor-task/</tspan><tspan x="236" class="note">a Harbor task, unchanged</tspan>
-      <tspan x="88" y="200">instruction.md</tspan><tspan x="236" class="note">the written objective</tspan>
-      <tspan x="88" y="224">task.toml</tspan><tspan x="236" class="note">resources and time limits</tspan>
-      <tspan x="88" y="248">environment/</tspan><tspan x="236" class="note">the researcher's image</tspan>
-      <tspan x="106" y="272">Dockerfile</tspan>
+      <tspan x="70" y="152">harbor-task/</tspan><tspan x="236" class="note">a Harbor task, unchanged</tspan>
+      <tspan x="88" y="176">instruction.md</tspan><tspan x="236" class="note">the written objective</tspan>
+      <tspan x="88" y="200">task.toml</tspan><tspan x="236" class="note">resources and time limits</tspan>
+      <tspan x="88" y="224">environment/</tspan><tspan x="236" class="note">the researcher's image</tspan>
+      <tspan x="106" y="248">Dockerfile</tspan>
+      <tspan x="106" y="272">output/</tspan><tspan x="236" class="note">the starting deliverable</tspan>
       <tspan x="88" y="296">tests/</tspan><tspan x="236" class="note">the grader</tspan>
       <tspan x="106" y="320">feedback.sh</tspan><tspan x="236" class="note">the score that is shown</tspan>
       <tspan x="106" y="344">test.sh</tspan><tspan x="236" class="note">the score that is sealed</tspan>
@@ -51,23 +51,24 @@
     <rect x="32" y="440" width="400" height="272" rx="12" class="panel"/>
     <text x="52" y="470" class="eyebrow">WHAT A HARBOR TASK LEAVES OUT</text>
     <text x="52" y="497" class="heading mono" font-size="19">task.py</text>
-    <rect x="52" y="512" width="360" height="154" rx="7" fill="var(--code)"/>
+    <rect x="52" y="512" width="360" height="170" rx="7" fill="var(--code)"/>
     <text class="code">
-      <tspan x="66" y="535">ari.bases.harbor_deliverable(</tspan>
-      <tspan x="98" y="554">run, harbor_task="harbor-task",</tspan>
-      <tspan x="98" y="573">deliverable="/app/output",</tspan>
-      <tspan x="98" y="592">feedback="/tests/feedback.sh",</tspan>
-      <tspan x="98" y="611">sealed="/tests/test.sh",</tspan>
-      <tspan x="98" y="630">rules=["...", "..."],</tspan>
-      <tspan x="66" y="649">)</tspan>
+      <tspan x="64" y="535">ari.bases.harbor_deliverable(</tspan>
+      <tspan x="84" y="554">run, harbor_task="harbor-task",</tspan>
+      <tspan x="84" y="573">seed="harbor-task/environment/output",</tspan>
+      <tspan x="84" y="592">deliverable="/app/output",</tspan>
+      <tspan x="84" y="611">feedback="/tests/feedback.sh",</tspan>
+      <tspan x="84" y="630">sealed="/tests/test.sh",</tspan>
+      <tspan x="84" y="649">rules=["...", "..."],</tspan>
+      <tspan x="64" y="668">)</tspan>
     </text>
-    <text x="52" y="692" class="note">A Harbor task has one test script and no list of rules.</text>
+    <text x="52" y="701" class="note">A Harbor task has one test script and no list of rules.</text>
   </g>
 
   <!-- From the files to what runs -->
-  <path d="M432 147H510" class="arrow"/>
-  <path d="M432 195H510" class="arrow"/>
-  <path d="M432 243H510" class="arrow"/>
+  <path d="M432 171H510" class="arrow"/>
+  <path d="M432 219H510" class="arrow"/>
+  <path d="M432 267H510" class="arrow"/>
   <path d="M432 291H472V577H510" class="arrow"/>
 
   <!-- The researcher -->
@@ -76,15 +77,15 @@
     <text x="532" y="62" class="eyebrow">RESEARCHER'S CONTAINER</text>
     <text x="532" y="89" class="heading">A Harbor agent, working in the task's own image</text>
     <text x="532" y="111" class="note">Harbor starts it and installs the agent. ARI adds the mounts and the submit tool.</text>
-    <path d="M532 126H1068" class="guide"/>
+    <path d="M532 132H1068" class="guide"/>
     <text class="mono">
-      <tspan x="532" y="152">/workspace/candidate/</tspan><tspan x="724" class="note">the deliverable it edits; starts as seed/</tspan>
+      <tspan x="532" y="272">/workspace/candidate/</tspan><tspan x="724" class="note">the deliverable it edits; starts as output/</tspan>
     </text>
-    <text x="532" y="200" class="label">Objective</text>
-    <text x="724" y="200" class="note">instruction.md, then the rules from task.py</text>
-    <text x="532" y="248" class="label">Image</text>
-    <text x="724" y="248" class="note">built from environment/ alone, without the grader</text>
-    <text x="724" y="268" class="note">or the task's compose services</text>
+    <text x="532" y="176" class="label">Objective</text>
+    <text x="724" y="176" class="note">instruction.md, then the rules from task.py</text>
+    <text x="532" y="224" class="label">Image</text>
+    <text x="724" y="224" class="note">built from environment/ alone, without the grader</text>
+    <text x="724" y="244" class="note">or the task's compose services</text>
   </g>
 
   <path d="M800 300V334" class="arrow"/>
@@ -124,6 +125,6 @@
   </g>
 
   <!-- The feedback score returns to the researcher -->
-  <path d="M1068 650H1108V147H1090" class="arrow"/>
+  <path d="M1068 650H1108V84H1090" class="arrow"/>
   <text transform="translate(1132 400) rotate(-90)" text-anchor="middle" class="note">feedback score, after each submission</text>
 </svg>

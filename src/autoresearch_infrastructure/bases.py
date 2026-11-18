@@ -88,7 +88,9 @@ def harbor_deliverable(
         Harbor's own ``/tests/test.sh``. Pass None for a task with no held-out
         score.
     ``seed``
-        The starting deliverable, a directory relative to the task file.
+        The starting deliverable, a directory relative to the task file. When
+        the Harbor task ships one, name the directory its Dockerfile copies to
+        ``deliverable``, such as ``harbor-task/environment/output``.
     ``grader``
         Where the scripts run: by default the task's main image; or a directory
         in the Harbor task holding the grader's own Dockerfile; or an image

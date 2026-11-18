@@ -13,6 +13,7 @@ def task(run):
     return ari.bases.harbor_deliverable(
         run,
         harbor_task="harbor-task",
+        seed="harbor-task/environment/output",   # the starting deliverable, as the task's image ships it
         deliverable="/app/output",          # the directory the grader reads; a candidate is its contents
         feedback="/tests/feedback.sh",      # scored after every submission and shown to the researcher
         sealed="/tests/test.sh",            # scored privately; no agent and no selection step reads it

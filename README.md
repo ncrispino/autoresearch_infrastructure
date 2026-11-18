@@ -222,7 +222,7 @@ their tasks in this format, and its parts are the parts of an ARI task. Write a
 task this way whenever grading needs a container. A plain Python `evaluator`, as
 in the packing task above, remains the light option for small tasks.
 
-![The task directory holds task.py, run.toml, seed/ and an unchanged Harbor task. The researcher is a Harbor agent in a container built from the Harbor task's environment/. Each submission goes through the ARI controller to a new grader container, where the task's feedback script returns a score to the researcher and its sealed script writes a score to private evidence.](docs/assets/harbor-deliverable.svg)
+![The task directory holds task.py, run.toml and an unchanged Harbor task, whose environment/output/ is the starting deliverable. The researcher is a Harbor agent in a container built from the Harbor task's environment/. Each submission goes through the ARI controller to a new grader container, where the task's feedback script returns a score to the researcher and its sealed script writes a score to private evidence.](docs/assets/harbor-deliverable.svg)
 
 | Part of the Harbor task | Role in ARI |
 | --- | --- |
@@ -247,6 +247,7 @@ def task(run):
     return ari.bases.harbor_deliverable(
         run,
         harbor_task="harbor-task",
+        seed="harbor-task/environment/output",   # the starting deliverable, as the task's image ships it
         deliverable="/app/output",          # the directory the grader reads; a candidate is its contents
         feedback="/tests/feedback.sh",      # scored after every submission and shown to the researcher
         sealed="/tests/test.sh",            # scored privately; no agent and no selection step reads it
@@ -257,7 +258,9 @@ def task(run):
     )
 ```
 
-- **The deliverable.** Harbor does not say which directory holds the solution.
+- **The deliverable.** Harbor does not say which directory holds the solution,
+  or where its starting files are. Here the image copies `environment/output/`
+  to `/app/output`, and `seed` names that same directory.
 - **Two scripts.** Harbor has one test script, which gives the final score.
   Running it on every submission would show the researcher the held-out
   result, so you name a feedback script for that and keep the other sealed.

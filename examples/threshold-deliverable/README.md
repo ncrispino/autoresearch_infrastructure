@@ -11,7 +11,7 @@ points. Its grader reports the accuracy on points the agent cannot read.
 | Part | Definition |
 | --- | --- |
 | Candidate | The contents of `/app/output`: here the one file `model.json`. |
-| Baseline | [seed/model.json](seed/model.json), a threshold of 0.2. |
+| Baseline | [harbor-task/environment/output/model.json](harbor-task/environment/output/model.json), a threshold of 0.2. The task's Dockerfile copies the same directory to `/app/output`, so the starting deliverable exists once. |
 | Objective | Maximize `reward`: the accuracy from `tests/feedback.sh`, on 50 hidden points. |
 | Sealed score | The accuracy from `tests/test.sh`, on 200 other hidden points. No agent sees it and selection does not use it. |
 | Rules | Two, written in [task.py](task.py). A Harbor instruction does not list rules, and the reviewer needs them. |
@@ -25,9 +25,8 @@ researcher improves a real benchmark task.
 | File | Purpose |
 | --- | --- |
 | [task.py](task.py) | The task: one call to `ari.bases.harbor_deliverable`. |
-| [seed/](seed/model.json) | The starting deliverable. |
 | [harbor-task/](harbor-task/task.toml) | The Harbor task, laid out as Harbor expects, plus one added script. |
-| [harbor-task/environment/](harbor-task/environment/Dockerfile) | The task's main container, with the training data. The researcher works in it. |
+| [harbor-task/environment/](harbor-task/environment/Dockerfile) | The task's main container, with the training data and, in `output/`, the starting deliverable. The researcher works in it. |
 | [harbor-task/tests/](harbor-task/tests/grade.py) | The grader and both hidden splits. `test.sh` is Harbor's own test script and the sealed score. `feedback.sh` is the script added for ARI. |
 | [local.toml](local.toml) | Run settings without agents. |
 | [run.toml](run.toml) | Run settings with a researcher and a reviewer. |
