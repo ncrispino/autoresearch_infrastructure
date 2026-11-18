@@ -125,14 +125,25 @@ class Environment:
         each start, seals them, and restores exactly that export before the
         next start. With ``"reset"``, nothing is exported and every start
         begins with only the parent candidate.
+    ``candidate_at``
+        A second container path at which the researcher sees the candidate
+        directory, such as ``/app/output``. It is the same directory as
+        ``/workspace/candidate/``, not a copy. Use it when the files are
+        written to run from a fixed place, so that a relative path such as
+        ``../data`` means the same to the researcher as it does to the grader.
     """
 
     harbor: Path | str | None = None
     workspace: str = "keep"
+    candidate_at: str | None = None
 
     def __post_init__(self):
         if self.workspace not in _WORKSPACE:
             raise ValueError('Environment workspace is "keep" or "reset"')
+        if self.candidate_at is not None:
+            from .harbor_filesystem import candidate_mount
+
+            candidate_mount(self.candidate_at)
         if self.harbor is not None and not isinstance(self.harbor, (str, Path)):
             raise ValueError("Environment harbor is the path of a Harbor task directory")
         if isinstance(self.harbor, str):

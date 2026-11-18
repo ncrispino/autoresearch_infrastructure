@@ -268,7 +268,8 @@ class _Opening:
                 "memory": task.memory.identity(digests.get("memory/preloaded"),
                                                summarize=_identity(task.memory.summarize)),
                 "environment": {"harbor": environment_identity("environment"),
-                                "workspace": task.environment.workspace},
+                                "workspace": task.environment.workspace,
+                                "candidate_at": task.environment.candidate_at},
                 "presenter": _identity(task.presenter) or "default",
                 "transforms": [code_identity(transform) for transform in task.transforms],
                 "original_instructions": original.specification() if task.transforms else None,
@@ -528,8 +529,10 @@ def run_researchers(run: OpenRun) -> dict:
         raise ValueError("run needs a [researcher] in the settings; use record to evaluate your own edits")
     from .coding_agent import CodingAgent
 
-    agent = (CodingAgent(agent=settings.researcher, image=run.image) if run.environment is None
-             else CodingAgent(agent=settings.researcher, environment=run.environment))
+    where = {"image": run.image} if run.environment is None else {"environment": run.environment}
+    if run.task.environment.candidate_at is not None:
+        where["candidate_at"] = run.task.environment.candidate_at
+    agent = CodingAgent(agent=settings.researcher, **where)
     inputs = run.inputs
     present_start = run.task.presenter or present
     repeats = settings.repeats

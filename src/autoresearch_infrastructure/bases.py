@@ -91,8 +91,8 @@ def harbor_deliverable(
         for ARI uses the default, ``/workspace/candidate``: the researcher
         edits that same path, so the instruction is true as written here and
         under ``harbor run``. For a task from elsewhere, name its own path,
-        such as ``/app/output``; the researcher is then told to use
-        ``/workspace/candidate/`` in its place.
+        such as ``/app/output``; the researcher then sees the candidate at that
+        path as well, so the task's relative paths and tools work unchanged.
     ``seed``
         The starting deliverable, a directory relative to the task file. The
         default is ``environment/candidate`` in the Harbor task, the directory
@@ -139,13 +139,13 @@ def harbor_deliverable(
     if seed is None:
         shipped = Path(harbor_task) / "environment/candidate"
         seed = shipped if (run.directory / shipped).is_dir() else "seed"
-    if task_environment:
-        _free_workspace(task, deliverable)
+    _free_workspace(task, deliverable, workdir=task_environment)
     evaluator = deliverables.HarborGraderEvaluator(
         task=task, deliverable=deliverable, feedback=feedback, sealed=sealed, grader=grader, state=state,
         rewards=rewards, capabilities=capabilities, network=network, feedback_log=feedback_log,
         feedback_artifacts=feedback_artifacts,
     )
+    elsewhere = deliverable.rstrip("/") != _CANDIDATE
     harbor = None
     if task_environment and (run.settings.researcher is not None or run.settings.reviewer is not None):
         hidden = list(private) + ([grader] if evaluator.context is not None and grader is not None else [])
@@ -159,9 +159,10 @@ def harbor_deliverable(
             objective=source.read_text(encoding="utf-8").strip(),
             rules=tuple(rules),
             environment=(
-                *((f"Where the text above names `{deliverable}`, the deliverable directory, use "
-                   "`/workspace/candidate/` instead: that directory is what is graded.",)
-                  if deliverable.rstrip("/") != _CANDIDATE else ()),
+                *((f"`{deliverable}`, the deliverable directory the text above names, and "
+                   "`/workspace/candidate/` are one directory here, not two copies. Its contents are what "
+                   "is graded, and the grader reads them at the first path.",)
+                  if elsewhere else ()),
                 "Submitting is described under the file layout below. It replaces any submission tool, "
                 "time limit or submission count the text above names.",
                 "The grader runs in a separate container that you cannot reach. Its score is returned to you "
@@ -180,7 +181,8 @@ def harbor_deliverable(
         evaluator=evaluator,
         validity=validity,
         cases=tuple(cases),
-        environment=Environment(harbor=harbor if run.settings.researcher is not None else None),
+        environment=Environment(harbor=harbor if run.settings.researcher is not None else None,
+                                candidate_at=deliverable if elsewhere else None),
         review_environment=harbor if run.settings.reviewer is not None else None,
         memory=memory or Memory(),
     )
@@ -189,20 +191,24 @@ def harbor_deliverable(
 _CANDIDATE = "/workspace/candidate"
 
 
-def _free_workspace(task: Path, deliverable: str) -> None:
-    """Refuse a Harbor task that keeps its own files where ARI mounts the researcher's workspace."""
+def _free_workspace(task: Path, deliverable: str, *, workdir: bool) -> None:
+    """Refuse a Harbor task that keeps its own files where ARI mounts the researcher's workspace.
+
+    The deliverable is checked for every task. ``workdir`` also checks the
+    task's working directory, which matters only when agents run in its image.
+    """
     import tomllib
 
     manifest = task / "task.toml"
-    workdir = (tomllib.loads(manifest.read_text(encoding="utf-8")).get("environment") or {}).get(
-        "workdir", "") if manifest.is_file() else ""
-    for label, path in (("[environment] workdir", workdir), ("deliverable", deliverable)):
+    declared = (tomllib.loads(manifest.read_text(encoding="utf-8")).get("environment") or {}).get(
+        "workdir", "") if workdir and manifest.is_file() else ""
+    for label, path in (("[environment] workdir", declared), ("deliverable", deliverable)):
         path = str(path).rstrip("/")
         if path != _CANDIDATE and (path == "/workspace" or path.startswith("/workspace/")):
             raise ValueError(
                 f"The Harbor task's {label} is {path}, but ARI mounts the researcher's workspace over "
                 "/workspace, which would hide the task's files there. Use /workspace/candidate for the "
-                "deliverable and another directory for everything else, or pass task_environment=False")
+                "deliverable and another directory for everything else")
 
 
 def harbor_task_files(

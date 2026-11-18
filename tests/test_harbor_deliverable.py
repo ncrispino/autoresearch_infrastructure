@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -307,28 +308,121 @@ def test_each_case_is_graded_separately_and_feedback_artifacts_reach_the_researc
         assert sorted(entry["case"] for entry in sealed_rewards(tmp_path / settings)) == ["large", "small"]
 
 
-def imported(tmp_path, call, **files):
-    """A task directory around a Harbor task from elsewhere, opened with no agents."""
+def imported(tmp_path, call, settings="reviewer = false\n", image=None, **files):
+    """A task directory around a Harbor task from elsewhere, opened with no agents unless the settings name one."""
     inside = {name: text for name, text in files.items() if name.startswith("harbor-task/")}
     harbor_task(tmp_path / "task/harbor-task", **{name[len("harbor-task/"):]: text for name, text in inside.items()})
     beside = {
         "task.py": ("import autoresearch_infrastructure as ari\n\n\n"
                     f"def task(run):\n    return ari.bases.harbor_deliverable(run, harbor_task='harbor-task', {call})\n"),
-        "settings.toml": "reviewer = false\n",
+        "settings.toml": settings,
         **{name: text for name, text in files.items() if name not in inside},
     }
     for name, text in beside.items():
         (tmp_path / "task" / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "task" / name).write_text(text)
-    return launch.open_run(tmp_path / "task", tmp_path / "task/settings.toml", tmp_path / "run", None)
+    return launch.open_run(tmp_path / "task", tmp_path / "task/settings.toml", tmp_path / "run", image)
 
 
-def test_a_task_from_elsewhere_keeps_its_own_deliverable_path_and_the_researcher_is_told_the_translation(tmp_path):
+def test_a_task_from_elsewhere_keeps_its_own_deliverable_path_for_the_grader_and_the_researcher(tmp_path):
     run = imported(tmp_path, "deliverable='/app/output', feedback='/tests/feedback.sh'",
                    **{"seed/answer.txt": "x\n"})
-    assert "Where the text above names `/app/output`, the deliverable directory, use `/workspace/candidate/`" in (
-        run.inputs.specification())
+    assert ("`/app/output`, the deliverable directory the text above names, and `/workspace/candidate/` are one "
+            "directory here") in run.inputs.specification()
     assert run.task.evaluator.deliverable.as_posix() == "/app/output"
+    assert run.task.environment.candidate_at == "/app/output"
+    plan = json.loads((tmp_path / "run/plan.json").read_text())
+    assert plan["inputs"]["environment"]["candidate_at"] == "/app/output"
+
+
+def test_the_researcher_is_started_with_the_candidate_at_the_tasks_own_path(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    started = []
+
+    class Agent:
+        def __init__(self, **options):
+            started.append(options)
+
+        def run(self, prompt, **options):
+            raise RuntimeError("fixture: no container is started")
+
+    monkeypatch.setattr("autoresearch_infrastructure.coding_agent.CodingAgent", Agent)
+    monkeypatch.setattr(HarborGraderEvaluator, "grade", lambda *arguments: {"reward": 0.5})
+    monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
+    agents = "sha256:" + "a" * 64
+    call = "feedback='/tests/feedback.sh', sealed=None, task_environment=False"
+    settings = "reviewer = false\n" + RESEARCHER.replace("86400", "600")
+    for name, own in (("elsewhere", "/app/output"), ("convention", None)):
+        run = imported(tmp_path / name, call + (f", deliverable='{own}'" if own else ""), settings, agents,
+                       **{"seed/answer.txt": "x\n"})
+        with run.research:
+            launch.run_researchers(run)
+        assert started.pop() == {"agent": run.settings.researcher, "image": agents,
+                                 **({"candidate_at": own} if own else {})}
+
+
+@pytest.mark.parametrize("path", ["/workspace/candidate", "/workspace", "/", "/tmp/x", "/etc/app", "app/output",
+                                  "/app/../etc", "/history/x", "/context"])
+def test_the_candidate_is_never_also_mounted_over_a_path_the_run_depends_on(path):
+    with pytest.raises(ValueError, match="cannot also be mounted"):
+        ari.Environment(candidate_at=path)
+
+
+@docker
+def test_the_researchers_container_sees_one_candidate_directory_at_both_paths(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from harbor.job import Job
+
+    from autoresearch_infrastructure.coding_agent import CodingAgent
+
+    configs = []
+
+    async def create(config):
+        configs.append(config)
+
+        async def run():
+            return SimpleNamespace(trial_results=[SimpleNamespace(exception_info=None, trial_name="fixture")])
+
+        return SimpleNamespace(run=run)
+
+    monkeypatch.setattr(Job, "create", create)
+    task = harbor_task(tmp_path / "harbor-task")
+    image = evaluator(tmp_path, task=task).image()  # /app/public.txt is in the task's image
+    workspace = tmp_path / "workspace"
+    (workspace / "candidate").mkdir(parents=True)
+    (workspace / "candidate/answer.txt").write_text("first\n")
+    recorder = SimpleNamespace(dispatch_record_candidate=lambda *arguments: {})
+    agent = CodingAgent(agent={"name": "terminus-2", "model_name": "fixture"}, image=image,
+                        candidate_at="/app/output")
+    with pytest.raises(RuntimeError, match="ATIF trajectory"):  # the fixture job runs no agent
+        agent.run("Fixture", workspace=workspace, evidence=tmp_path / "evidence", recorder=recorder,
+                  jobs_root=tmp_path / "jobs")
+    mounts = {mount["target"]: mount for mount in configs[0].environment.mounts}
+    assert mounts["/app/output"]["source"] == str(workspace / "candidate")
+    assert not mounts["/app/output"].get("read_only") and not mounts["/workspace"].get("read_only")
+
+    # The same two mounts on real Docker: one directory, and the task's relative paths resolve as in grading.
+    name = "ari-candidate-" + tmp_path.name[-12:].lower().replace("_", "-")
+    arguments = [flag for target in ("/workspace", "/app/output")
+                 for flag in ("--mount", f"type=bind,source={mounts[target]['source']},target={target}")]
+    subprocess.run(["docker", "run", "--detach", "--name", name, "--read-only", "--workdir", "/app/output",
+                    *arguments, image, "sleep", "60"], check=True, capture_output=True)
+
+    def inside(command):
+        return subprocess.run(["docker", "exec", name, "sh", "-c", command], capture_output=True, text=True,
+                              check=True).stdout
+
+    try:
+        assert inside("cat ../public.txt answer.txt /workspace/candidate/answer.txt") == "public\nfirst\nfirst\n"
+        inside("echo edited > /app/output/answer.txt")
+        assert (workspace / "candidate/answer.txt").read_text() == "edited\n"
+        assert inside("cat /workspace/candidate/answer.txt") == "edited\n"
+        # Between submissions ARI replaces the candidate's files in place; a running container sees the new ones.
+        (workspace / "candidate/answer.txt").unlink()
+        (workspace / "candidate/next.txt").write_text("fresh\n")
+        assert inside("ls /app/output; cat /app/output/next.txt") == "next.txt\nfresh\n"
+    finally:
+        subprocess.run(["docker", "rm", "--force", name], capture_output=True)
 
 
 def test_the_starting_deliverable_defaults_to_the_directory_the_task_ships(tmp_path):
@@ -338,16 +432,17 @@ def test_the_starting_deliverable_defaults_to_the_directory_the_task_ships(tmp_p
     assert run.task.evaluator.deliverable.as_posix() == "/workspace/candidate"
 
 
-@pytest.mark.parametrize("call, toml, named", [
-    ("feedback='/tests/feedback.sh'", '[environment]\nworkdir = "/workspace"\n', "workdir is /workspace"),
-    ("feedback='/tests/feedback.sh', deliverable='/workspace/out'", "[environment]\n", "deliverable is /workspace/out"),
-])
-def test_a_task_that_keeps_files_under_the_researchers_workspace_is_refused(tmp_path, call, toml, named):
-    files = {"seed/answer.txt": "x\n", "harbor-task/task.toml": toml}
-    with pytest.raises(ValueError, match=named):
-        imported(tmp_path, call, **files)
+def test_a_task_that_keeps_files_under_the_researchers_workspace_is_refused(tmp_path):
+    files = {"seed/answer.txt": "x\n", "harbor-task/task.toml": '[environment]\nworkdir = "/workspace"\n'}
+    call = "feedback='/tests/feedback.sh'"
+    with pytest.raises(ValueError, match="workdir is /workspace"):
+        imported(tmp_path / "workdir", call, **files)
     run = imported(tmp_path / "host", call + ", task_environment=False", **files)  # agents in --image: no clash
     assert run.task.environment.harbor is None
+    for options in ("", ", task_environment=False"):  # a deliverable there clashes wherever the agents run
+        with pytest.raises(ValueError, match="deliverable is /workspace/out"):
+            imported(tmp_path / ("out" + options[-6:]), call + ", deliverable='/workspace/out'" + options,
+                     **{"seed/answer.txt": "x\n"})
 
 
 def test_a_task_without_context_files_is_told_of_no_context_directory():

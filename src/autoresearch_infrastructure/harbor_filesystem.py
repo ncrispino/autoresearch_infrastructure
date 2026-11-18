@@ -32,6 +32,19 @@ def immutable_image(image, role: str) -> str:
     return image
 
 
+_NOT_FOR_CANDIDATE = {"workspace", "context", "history", "run", "opt", "tmp", "installed-agent", "review",
+                      "proc", "sys", "dev", "etc", "bin", "sbin", "lib", "lib64", "usr", "logs", "tests"}
+
+
+def candidate_mount(path) -> str:
+    """Check a second container path for the candidate directory and return it without a trailing slash."""
+    parts = Path(path).parts if isinstance(path, str) else ()
+    if len(parts) < 2 or parts[0] != "/" or ".." in parts or parts[1] in _NOT_FOR_CANDIDATE:
+        raise ValueError(f"The candidate cannot also be mounted at {path!r}: name an absolute path outside "
+                         "the system directories and the paths ARI mounts")
+    return str(Path(path))
+
+
 def native_agent_config(value, *, default_timeout, researcher=False, max_timeout=7200):
     """Validate a Harbor agent configuration and return a private copy.
 
@@ -85,7 +98,7 @@ def _save_native_trajectory(jobs_root, job_name, evidence):
 
 def run_filesystem_agent(
     *, agent, image, instruction, readonly, workspace, evidence, jobs_root,
-    recorder=None, role="validity", environment=None,
+    recorder=None, role="validity", environment=None, candidate_at=None,
 ):
     """Run the agent once and return Harbor's trial result.
 
@@ -103,6 +116,9 @@ def run_filesystem_agent(
     container. ARI's working directory, skills directory and isolation overlay
     still apply. Every job runs on local Docker and is deleted with its volumes
     when it ends, so only the mounted workspace outlives a start.
+
+    ``candidate_at`` also mounts the workspace's ``candidate`` directory,
+    read-write, at that container path.
     """
     from harbor.agents.factory import AgentFactory
     from harbor.job import Job
@@ -151,6 +167,11 @@ def run_filesystem_agent(
             raise ValueError("Read-only input shadows a reserved filesystem-agent mount")
         mounts.append({"type": "bind", "source": str(Path(source).resolve()), "target": target, "read_only": True})
     mounts.append({"type": "bind", "source": str(workspace.resolve()), "target": "/workspace"})
+    if candidate_at is not None:
+        # The same host directory at a second path: an edit at either is an edit at both.
+        (workspace / "candidate").mkdir(parents=True, exist_ok=True)
+        mounts.append({"type": "bind", "source": str((workspace / "candidate").resolve()),
+                       "target": candidate_mount(candidate_at)})
     with ExitStack() as stack:
         if recorder is not None:
             socket_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="ari-agent-socket-")))

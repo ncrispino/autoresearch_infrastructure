@@ -105,7 +105,8 @@ def test_default_inputs_keep_the_standard_prompt_and_record_each_start(example, 
     plan = json.loads((example.output / "plan.json").read_text())
     assert plan["inputs"] == {"memory": {"history": "all", "preload": None, "conversations": 0,
                                          "conversation_mode": "files", "log": False, "summarize": None},
-                              "environment": {"harbor": None, "workspace": "keep"}, "presenter": "default",
+                              "environment": {"harbor": None, "workspace": "keep", "candidate_at": None},
+                              "presenter": "default",
                               "transforms": [], "original_instructions": None}
     assert plan["reviewer_image"] == IMAGE and plan["review_environment"] is None
     standard = plan["instructions"].rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(

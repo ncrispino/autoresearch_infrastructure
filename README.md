@@ -78,8 +78,10 @@ def task(run):
 
 A Harbor task from elsewhere, such as a published benchmark task, is used
 without editing its files: pass `deliverable=` with the path its instruction
-names, such as `/app/output`. The grader sees the candidate at that path, and
-the researcher is told to use `/workspace/candidate/` in its place.
+names, such as `/app/output`. The grader and the researcher both see the
+candidate at that path, so a relative path in the deliverable, such as
+`../data`, means the same in both containers. For the researcher it is the same
+directory as `/workspace/candidate/`.
 
 `task.py` can also name the metrics when the grader reports several, a
 `validity` function for rules that code can decide exactly, and `cases` to

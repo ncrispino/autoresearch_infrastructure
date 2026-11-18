@@ -50,7 +50,7 @@ anything.
 
 | `task.py` names | How to find it in the source task |
 | --- | --- |
-| `deliverable` | The directory the instruction tells the agent to write into, such as `/app/output`. Pass `seed` the directory in the task that its Dockerfile copies there, or a `seed/` of your own if the task ships no starting files. A task that keeps other files under `/workspace` is refused, because ARI mounts the researcher's workspace there. |
+| `deliverable` | The directory the instruction tells the agent to write into, such as `/app/output`. Pass `seed` the directory in the task that its Dockerfile copies there, or a `seed/` of your own if the task ships no starting files. The researcher sees the candidate at this path as well as at `/workspace/candidate/`, so the task's relative paths and local tools work unchanged. A task that keeps other files under `/workspace` is refused, because ARI mounts the researcher's workspace there. |
 | `feedback` | A grader script that scores a split the agent may be shown. Many benchmarks have one for intermediate submissions. If the task has only `tests/test.sh`, divide its hidden instances into two splits once and write a script for each. |
 | `sealed` | The script for the final, hidden split. Never pass the same script as `feedback`. |
 | `rules` | The sentences of `instruction.md` that a candidate could break and someone has to judge. Add your own if the source has none, and say so in the task's README. |

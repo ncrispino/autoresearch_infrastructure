@@ -36,16 +36,18 @@ class CodingAgent:
     ``agent`` is a Harbor ``AgentConfig`` or the equivalent dictionary. The agent
     must support MCP servers and write ATIF trajectories. ``image`` is the ID of a
     container image that has what the agent needs to run. ``environment`` is a
-    ``HarborEnvironment`` to use instead of ``image``.
+    ``HarborEnvironment`` to use instead of ``image``. ``candidate_at`` is a
+    second container path at which the candidate directory is also mounted.
     """
 
-    def __init__(self, *, agent, image=None, environment=None):
+    def __init__(self, *, agent, image=None, environment=None, candidate_at=None):
         self.agent = native_agent_config(agent, default_timeout=600, researcher=True,
                                          max_timeout=RESEARCHER_MAX_TIMEOUT)
         if (image is None) == (environment is None):
             raise ValueError("A researcher runs in either an image or a Harbor environment")
         self.image = immutable_image(image, "A researcher") if image is not None else None
         self.environment = environment
+        self.candidate_at = candidate_at
 
     def run(
         self,
@@ -68,7 +70,7 @@ class CodingAgent:
         trial = run_filesystem_agent(
             agent=self.agent, image=self.image, environment=self.environment, instruction=prompt,
             workspace=workspace, evidence=evidence, readonly=readonly or {}, recorder=recorder,
-            role=role, jobs_root=jobs_root or evidence / "harbor-jobs",
+            role=role, jobs_root=jobs_root or evidence / "harbor-jobs", candidate_at=self.candidate_at,
         )
         if trial.exception_info is not None:
             raise RuntimeError("Native Harbor researcher failed: " + trial.exception_info.exception_type)

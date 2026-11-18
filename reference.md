@@ -680,7 +680,7 @@ def task(run):
 | Argument | Meaning |
 | --- | --- |
 | `harbor_task` | The Harbor task directory. |
-| `deliverable` | The container path the grader reads the candidate from. The default is `/workspace/candidate`, the convention for a task written for ARI: the researcher edits that same path, so the instruction is true as written. For a task from elsewhere, pass its own path, such as `/app/output`. |
+| `deliverable` | The container path the grader reads the candidate from. The default is `/workspace/candidate`, the convention for a task written for ARI: the researcher edits that same path, so the instruction is true as written. For a task from elsewhere, pass its own path, such as `/app/output`: the researcher then sees the candidate at that path too. |
 | `feedback` | The grader script whose reward the researcher sees and selection ranks: a path in the grader container. |
 | `sealed` | The grader script whose reward is held out. The default is Harbor's `/tests/test.sh`. `None` means the task has no held-out score. |
 | `seed` | The starting deliverable, a directory relative to the task file. The default is `environment/candidate` in the Harbor task, the directory its Dockerfile copies to `deliverable`, so the files exist once. Without that directory it is `seed/` beside the task file. A starter that a Dockerfile generates during the build is not read from the image: copy it out once. |
@@ -745,13 +745,22 @@ Terminus-2. Build an image from the task's own that adds it, and write
 `image = "sha256:..."` under `[task]` in the run settings. The agents then run
 in that image. The grader still uses the task's own image.
 
-The researcher always edits `/workspace/candidate/`. When `deliverable` is
-another path, the instructions say to use `/workspace/candidate/` in its place.
-They also say that `record_candidate` replaces the task's own submission tool.
+The researcher's candidate is always at `/workspace/candidate/`. When
+`deliverable` is another path, the same directory is also mounted there in the
+researcher's container, and the instructions say that the two paths are one
+directory. A deliverable written to run from the task's own place then behaves
+for the researcher as it does for the grader: `../data` from `/app/output` is
+`/app/data` in both. This is `ari.Environment(candidate_at=...)`, which any task
+can set. The instructions also say that `record_candidate` replaces the task's
+own submission tool.
+
 ARI mounts the researcher's workspace over `/workspace`, which would hide
-anything else a task's image keeps there, so a task whose `workdir` or
-`deliverable` is under `/workspace`, other than `/workspace/candidate`, is
-refused unless `task_environment=False`. Review needs at least one rule, which a Harbor instruction
+anything else a task's image keeps there. A `deliverable` under `/workspace`
+other than `/workspace/candidate` is refused, and so is a task whose `workdir`
+is under `/workspace` unless `task_environment=False`. In a task that follows
+the convention, the deliverable should reach other files by absolute path, such
+as `/app/data`, because `/workspace` holds different things for the researcher
+and for the grader. Review needs at least one rule, which a Harbor instruction
 does not list: pass `rules`, or write `reviewer = false`.
 
 See the [curve-fitting example](examples/curve-fitting/README.md), which has
@@ -1106,7 +1115,7 @@ controller's selection, evidence and budgets are unchanged.
 ### Environment
 
 ```python
-ari.Task(..., environment=ari.Environment(harbor="researcher-env", workspace="reset"))
+ari.Task(..., environment=ari.Environment(harbor="researcher-env", workspace="reset", candidate_at="/app/output"))
 ```
 
 A start's container, its services and their volumes are deleted when the start
@@ -1119,6 +1128,12 @@ ends. `workspace` says what survives besides the candidate and the memory:
 
 A changed export is refused before the next start. An export larger than the
 context limits is not kept, and its record says why.
+
+`candidate_at` names a second container path at which the researcher sees the
+candidate directory. It is the same directory as `/workspace/candidate/`, not a
+copy, and stays in step when ARI replaces the candidate's files between
+submissions. Use it for files written to run from a fixed place. It may not be
+a system directory or a path ARI mounts.
 
 `harbor` names a Harbor task directory. ARI uses only its `task.toml`
 `[environment]` table and its `environment/` directory: a Dockerfile, an
