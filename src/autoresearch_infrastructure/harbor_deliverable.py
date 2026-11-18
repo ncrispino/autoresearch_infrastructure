@@ -44,6 +44,8 @@ SEALED_RECORD = "sealed.json"
 _PINNED = re.compile(r"(?:[^@\s]+@)?sha256:[0-9a-f]{64}")
 _TESTS = PurePosixPath("/tests")
 _LOGS = PurePosixPath("/logs/verifier")
+_ARTIFACTS = PurePosixPath("/logs/artifacts")
+CASE_VARIABLE = "ARI_CASE"
 _SYSTEM = {"proc", "sys", "dev", "etc", "tests", "logs", "tmp"}
 _LOG_LIMIT = 1_000_000
 # Harbor test scripts are bash; a minimal grader image may have only sh.
@@ -102,6 +104,14 @@ class HarborGraderEvaluator:
         True publishes the feedback script's output as ``grader-log.txt`` in the
         evaluation's public artifacts, where the researcher can read it. Leave
         it off unless that output is known to reveal no hidden data.
+    ``feedback_artifacts``
+        True publishes the files the feedback script writes under
+        ``/logs/artifacts``, such as a plot, in the same public artifacts. Off,
+        they are kept with the private evidence. The sealed script's files are
+        always private.
+
+    Each script is told which case it is grading in the environment variable
+    ``ARI_CASE``. A task with one case can ignore it.
 
     Every evaluation gets a new grader container, which is deleted with
     everything it wrote when the script ends. It has no capabilities beyond
@@ -114,7 +124,8 @@ class HarborGraderEvaluator:
 
     def __init__(self, *, task, deliverable: str, feedback: str, sealed: str | None = None,
                  grader: str | None = None, state: Path, rewards: dict[Metric, str] | None = None,
-                 capabilities=(), network: bool = False, feedback_log: bool = False):
+                 capabilities=(), network: bool = False, feedback_log: bool = False,
+                 feedback_artifacts: bool = False):
         self.task = Path(task).resolve()
         manifest = self.task / "task.toml"
         if not manifest.is_file():
@@ -143,9 +154,9 @@ class HarborGraderEvaluator:
         self.capabilities = tuple(capabilities)
         if any(not isinstance(name, str) or not re.fullmatch(r"[A-Z_]+", name) for name in self.capabilities):
             raise ValueError("capabilities are Linux capability names, such as SYS_ADMIN")
-        if type(network) is not bool or type(feedback_log) is not bool:
-            raise ValueError("network and feedback_log are True or False")
-        self.network, self.feedback_log = network, feedback_log
+        if any(type(flag) is not bool for flag in (network, feedback_log, feedback_artifacts)):
+            raise ValueError("network, feedback_log and feedback_artifacts are True or False")
+        self.network, self.feedback_log, self.feedback_artifacts = network, feedback_log, feedback_artifacts
         self.rewards = None if rewards is None else dict(rewards)
         if self.rewards is not None:
             MetricSchema(tuple(self.rewards))
@@ -188,6 +199,7 @@ class HarborGraderEvaluator:
             "scripts": {name: path.as_posix() for name, path in self.scripts.items()},
             "rewards": None if self.rewards is None else {m.name: key for m, key in self.rewards.items()},
             "capabilities": self.capabilities, "network": self.network, "feedback_log": self.feedback_log,
+            "feedback_artifacts": self.feedback_artifacts,
         }
 
     @property
@@ -218,8 +230,11 @@ class HarborGraderEvaluator:
         write_json(self.record, {"definition": self.definition, "image": image, "built": built})
         return image
 
-    def grade(self, candidate: Path, script: str, evidence: Path) -> dict:
-        """Run one script on ``candidate`` and return its rewards. Saves the script's logs under ``evidence``."""
+    def grade(self, candidate: Path, script: str, evidence: Path, case: str = "default") -> dict:
+        """Run one script on ``candidate`` for ``case`` and return its rewards.
+
+        The script's output, reward file and artifacts are saved under ``evidence``.
+        """
         image = self.image()
         name = "ari-grader-" + uuid4().hex[:12]
         command = [
@@ -227,7 +242,8 @@ class HarborGraderEvaluator:
             "--pids-limit", "512", "--init",
             "--cpus", str(self.environment.get("cpus", 1)),
             "--memory", f"{self.environment.get('memory_mb', 4096)}m",
-            "--volume", _LOGS.as_posix(),  # anonymous; removed with the container
+            "--volume", _LOGS.as_posix(), "--volume", _ARTIFACTS.as_posix(),  # anonymous; removed with the container
+            "--env", f"{CASE_VARIABLE}={case}",
             "--mount", f"type=bind,source={Path(candidate).resolve()},target={self.deliverable},readonly",
         ]
         if not self.network:
@@ -249,7 +265,9 @@ class HarborGraderEvaluator:
             output = (result.stdout + result.stderr)[-_LOG_LIMIT:]
             (evidence / "output.txt").write_bytes(output)
             logs = evidence / "verifier"
-            subprocess.run(["docker", "cp", f"{name}:{_LOGS}/.", str(logs)], capture_output=True)
+            for source, target in ((_LOGS, logs), (_ARTIFACTS, evidence / "artifacts")):
+                subprocess.run(["docker", "cp", f"{name}:{source}/.", str(target)], capture_output=True)
+                _regular_files_only(target)
             rewards = _rewards(logs)
             if rewards is None:
                 raise RuntimeError(f"The {script} grader script exited {result.returncode} and wrote no "
@@ -262,7 +280,7 @@ class HarborGraderEvaluator:
         private = context.private_artifacts
         if private is None:
             raise ValueError("Grading needs a private evidence directory for the grader's logs")
-        rewards = self.grade(candidate, "feedback", private / "feedback")
+        rewards = self.grade(candidate, "feedback", private / "feedback", context.task)
         if self.rewards is None:
             if len(rewards) != 1:
                 raise ValueError(f"The feedback script wrote the rewards {sorted(rewards)}; "
@@ -274,10 +292,14 @@ class HarborGraderEvaluator:
             metrics = {metric: float(rewards[key]) for metric, key in self.rewards.items()}
         if self.feedback_log:
             shutil.copyfile(private / "feedback/output.txt", context.artifacts / "grader-log.txt")
+        produced = private / "feedback/artifacts"
+        if self.feedback_artifacts and produced.is_dir():
+            shutil.copytree(produced, context.artifacts, dirs_exist_ok=True)
+            shutil.rmtree(produced)
         if "sealed" in self.scripts:
             # A failure here is recorded privately and never changes what the researcher sees.
             try:
-                sealed = {"rewards": self.grade(candidate, "sealed", private / "sealed")}
+                sealed = {"rewards": self.grade(candidate, "sealed", private / "sealed", context.task)}
             except (RuntimeError, ValueError, OSError) as error:
                 sealed = {"error": f"{type(error).__name__}: {error}"}
             write_json(private / SEALED_RECORD, {"candidate_hash": context.candidate_hash, "case": context.task,
@@ -299,6 +321,13 @@ def _rewards(logs: Path) -> dict | None:
     ):
         raise ValueError("A grader must write finite numeric rewards")
     return rewards
+
+
+def _regular_files_only(root: Path) -> None:
+    """Drop links and special files a grader left, so nothing copied out can point back into the host."""
+    for path in sorted(root.rglob("*"), reverse=True) if root.is_dir() else ():
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            path.unlink()
 
 
 def _docker(args: list[str]) -> str:

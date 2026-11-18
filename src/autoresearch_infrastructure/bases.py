@@ -65,6 +65,8 @@ def harbor_deliverable(
     capabilities: tuple[str, ...] | list[str] = (),
     network: bool = False,
     feedback_log: bool = False,
+    feedback_artifacts: bool = False,
+    cases: tuple[str, ...] | list[str] = ("default",),
 ) -> Task:
     """Improve the deliverable of a Harbor task, scored by that task's own grader.
 
@@ -111,8 +113,14 @@ def harbor_deliverable(
     Dockerfile ``FROM`` lines must be pinned by digest.
     ``task_environment=False`` runs them in the ``--image`` container instead.
 
-    ``capabilities``, ``network`` and ``feedback_log`` loosen the grader
-    container; see ``HarborGraderEvaluator``.
+    ``cases`` names the fixed inputs every candidate is graded on. Each one is
+    a separate run of the scripts, which read the case name from the
+    environment variable ``ARI_CASE``.
+
+    ``feedback_artifacts=True`` shows the researcher the files the feedback
+    script writes under ``/logs/artifacts``, such as a plot. ``capabilities``,
+    ``network`` and ``feedback_log`` loosen the grader container; see
+    ``HarborGraderEvaluator``.
     """
     from . import harbor_deliverable as deliverables
 
@@ -123,6 +131,7 @@ def harbor_deliverable(
     evaluator = deliverables.HarborGraderEvaluator(
         task=task, deliverable=deliverable, feedback=feedback, sealed=sealed, grader=grader, state=state,
         rewards=rewards, capabilities=capabilities, network=network, feedback_log=feedback_log,
+        feedback_artifacts=feedback_artifacts,
     )
     harbor = None
     if task_environment and (run.settings.researcher is not None or run.settings.reviewer is not None):
@@ -155,6 +164,7 @@ def harbor_deliverable(
         objective=objective or deliverables.REWARD,
         evaluator=evaluator,
         validity=validity,
+        cases=tuple(cases),
         environment=Environment(harbor=harbor if run.settings.researcher is not None else None),
         review_environment=harbor if run.settings.reviewer is not None else None,
         memory=memory or Memory(),

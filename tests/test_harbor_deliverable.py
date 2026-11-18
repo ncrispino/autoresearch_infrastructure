@@ -82,7 +82,7 @@ def test_a_grader_that_cannot_keep_its_promises_is_refused_before_docker(tmp_pat
 def test_feedback_is_the_public_score_and_the_sealed_score_stays_in_private_evidence(tmp_path, monkeypatch):
     graded = []
 
-    def grade(self, candidate, script, evidence):
+    def grade(self, candidate, script, evidence, case):
         graded.append(script)
         evidence.mkdir(parents=True)
         (evidence / "output.txt").write_text(f"hidden {script} details")
@@ -109,7 +109,7 @@ def test_feedback_is_the_public_score_and_the_sealed_score_stays_in_private_evid
 
 
 def test_a_failed_sealed_script_is_recorded_privately_and_does_not_change_the_measurement(tmp_path, monkeypatch):
-    def grade(self, candidate, script, evidence):
+    def grade(self, candidate, script, evidence, case):
         evidence.mkdir(parents=True)
         (evidence / "output.txt").write_text("")
         if script == "sealed":
@@ -264,3 +264,37 @@ def test_a_script_that_writes_no_reward_leaves_the_evaluation_unfinished(tmp_pat
     (tmp_path / "candidate").mkdir()
     with pytest.raises(RuntimeError, match="exited 3 and wrote no reward"):
         grader.grade(tmp_path / "candidate", "feedback", tmp_path / "evidence")
+
+
+@docker
+def test_each_case_is_graded_separately_and_feedback_artifacts_reach_the_researcher_only_when_asked(tmp_path):
+    script = (
+        'case "$ARI_CASE" in small) echo 1 ;; large) echo 3 ;; esac > /logs/verifier/reward.txt\n'
+        'echo "plot for $ARI_CASE" > /logs/artifacts/plot.txt\n'
+        'ln -s /etc/passwd /logs/artifacts/link\n')
+    materialize(tmp_path / "task", {
+        "task.py": (
+            "import autoresearch_infrastructure as ari\n\n\n"
+            "def task(run):\n"
+            "    return ari.bases.harbor_deliverable(\n"
+            "        run, harbor_task='harbor-task', deliverable='/app/output', feedback='/tests/feedback.sh',\n"
+            "        sealed='/tests/test.sh', cases=('small', 'large'),\n"
+            "        feedback_artifacts=run.settings.task.get('publish', False))\n"),
+        "seed/answer.txt": "x\n",
+        "public.toml": "reviewer = false\n[limits]\nevaluations = 4\n[task]\npublish = true\n",
+        "private.toml": "reviewer = false\n[limits]\nevaluations = 4\n",
+    })
+    harbor_task(tmp_path / "task/harbor-task", **{"tests/feedback.sh": script, "tests/test.sh": script})
+    for settings, published in (("public", True), ("private", False)):
+        run = launch.open_run(tmp_path / "task", tmp_path / f"task/{settings}.toml", tmp_path / settings, None)
+        with run.research:
+            summary = launch.record_workspace(run)
+        assert summary["candidates"][0]["metrics"] == {"reward": 2.0}  # the mean of the two cases
+        assert summary["budget"]["evaluations"]["used"] == 2
+        root = tmp_path / settings / "research/sessions/research"
+        shown = sorted(path.read_text() for path in (root / "history").rglob("plot.txt"))
+        assert shown == (["plot for large\n", "plot for small\n"] if published else [])
+        # The sealed script's files stay private either way, and a link a grader left is dropped.
+        assert len(list((root / "private").rglob("sealed/artifacts/plot.txt"))) == 2
+        assert not [path for path in (tmp_path / settings).rglob("link")]
+        assert sorted(entry["case"] for entry in sealed_rewards(tmp_path / settings)) == ["large", "small"]
