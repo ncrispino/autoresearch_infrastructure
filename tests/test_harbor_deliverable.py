@@ -93,6 +93,7 @@ def test_feedback_is_the_public_score_and_the_sealed_score_stays_in_private_evid
 
     monkeypatch.setattr(HarborGraderEvaluator, "grade", grade)
     monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
+    monkeypatch.setattr(HarborGraderEvaluator, "prepare", lambda self: None)  # no image to compare the seed with
     run = open_copy(tmp_path, "reviewer = false\n[limits]\ncandidates = 3\nevaluations = 3\n")
     first, second = record(run, '{"threshold": 0.5}', '{"threshold": 0.9}')
     assert [row["metrics"] for row in second["candidates"]] == [{"reward": 0.5}, {"reward": 0.9}]
@@ -119,6 +120,7 @@ def test_a_failed_sealed_script_is_recorded_privately_and_does_not_change_the_me
 
     monkeypatch.setattr(HarborGraderEvaluator, "grade", grade)
     monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
+    monkeypatch.setattr(HarborGraderEvaluator, "prepare", lambda self: None)  # no image to compare the seed with
     run = open_copy(tmp_path, "reviewer = false\n")
     summary, = record(run, '{"threshold": 0.5}')
     assert summary["candidates"][0]["metrics"] == {"reward": 0.5}
@@ -286,7 +288,7 @@ def test_each_case_is_graded_separately_and_feedback_artifacts_reach_the_researc
             "def task(run):\n"
             "    return ari.bases.harbor_deliverable(\n"
             "        run, harbor_task='harbor-task', deliverable='/app/output', feedback='/tests/feedback.sh',\n"
-            "        sealed='/tests/test.sh', cases=('small', 'large'),\n"
+            "        sealed='/tests/test.sh', cases=('small', 'large'), check_seed=False,\n"
             "        feedback_artifacts=run.settings.task.get('publish', False))\n"),
         "seed/answer.txt": "x\n",
         "public.toml": "reviewer = false\n[limits]\nevaluations = 4\n[task]\npublish = true\n",
@@ -349,6 +351,7 @@ def test_the_researcher_is_started_with_the_candidate_at_the_tasks_own_path(tmp_
     monkeypatch.setattr("autoresearch_infrastructure.coding_agent.CodingAgent", Agent)
     monkeypatch.setattr(HarborGraderEvaluator, "grade", lambda *arguments: {"reward": 0.5})
     monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
+    monkeypatch.setattr(HarborGraderEvaluator, "prepare", lambda self: None)  # no image to compare the seed with
     agents = "sha256:" + "a" * 64
     call = "feedback='/tests/feedback.sh', sealed=None, task_environment=False"
     settings = "reviewer = false\n" + RESEARCHER.replace("86400", "600")
@@ -455,3 +458,75 @@ def test_a_task_without_context_files_is_told_of_no_context_directory():
     assert "| `/context/` | Read-only task material. |" in shown
     assert "`/context` and `/history` are mounted read-only." in shown
     assert "/context" not in hidden and "`/history` is mounted read-only." in hidden and "$" not in hidden
+
+
+def test_a_seed_that_differs_from_what_the_image_ships_is_named_file_by_file(tmp_path, monkeypatch):
+    shipped_files = tmp_path / "image-files"
+    materialize(shipped_files, {"model.json": '{"threshold": 0.2}\n', "notes/readme.txt": "kept\n"})
+
+    def fake_shipped(image, path, destination):
+        shutil.copytree(shipped_files, destination)
+        return destination
+
+    monkeypatch.setattr(harbor_deliverable, "shipped", fake_shipped)
+    monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
+    seed = tmp_path / "seed"
+    materialize(seed, {"model.json": '{"threshold": 0.9}\n', "extra.txt": "mine\n"})
+    grader = evaluator(tmp_path, deliverable="/app/output", seed=seed)
+    write_json_record = tmp_path / "state/grader.json"
+    write_json_record.parent.mkdir(parents=True)
+    write_json_record.write_text(json.dumps({"definition": grader.definition, "image": "sha256:" + "c" * 64}))
+    with pytest.raises(ValueError) as refused:
+        grader.prepare()
+    message = str(refused.value)
+    assert "notes/readme.txt is only in the image" in message and "extra.txt is only in the seed" in message
+    assert "model.json differs" in message and "ari extract-seed" in message and "check_seed=False" in message
+
+    shutil.rmtree(seed)
+    shutil.copytree(shipped_files, seed)
+    grader.prepare()
+    recorded = json.loads(write_json_record.read_text())
+    assert recorded["seed_checked_against"] == "sha256:" + "c" * 64
+    monkeypatch.setattr(harbor_deliverable, "shipped", lambda *arguments: pytest.fail("checked twice"))
+    grader.prepare()  # recorded once, so later evaluations do not create a container
+
+
+@docker
+def test_extract_seed_copies_a_starter_the_dockerfile_generates_and_the_run_checks_against_it(tmp_path):
+    task = harbor_task(tmp_path / "harbor-task", **{
+        "environment/Dockerfile": (f"FROM {BASE}\nCOPY public.txt /app/public.txt\n"
+                                   "RUN mkdir -p /app/output/sub && echo generated > /app/output/start.txt"
+                                   " && echo deeper > /app/output/sub/more.txt && ln -s /etc/passwd /app/output/link\n"),
+    })
+
+    def cli(*arguments):
+        return subprocess.run([sys.executable, "-m", "autoresearch_infrastructure.cli", *map(str, arguments)],
+                              capture_output=True, text=True, timeout=300)
+
+    extracted = cli("extract-seed", task, "--deliverable", "/app/output", "--output", tmp_path / "task/seed")
+    assert extracted.returncode == 0, extracted.stderr
+    result = json.loads(extracted.stdout)
+    assert result["shipped"] is True and result["problem"] is None
+    assert result["files"] == ["start.txt", "sub/more.txt"]  # the link is dropped
+    assert (tmp_path / "task/seed/start.txt").read_text() == "generated\n"
+    again = cli("extract-seed", task, "--deliverable", "/app/output", "--output", tmp_path / "task/seed")
+    assert again.returncode == 2 and "already exists" in again.stderr
+    nothing = cli("extract-seed", task, "--deliverable", "/app/nothing", "--output", tmp_path / "empty")
+    assert json.loads(nothing.stdout)["shipped"] is False and not list((tmp_path / "empty").iterdir())
+
+    # A run with that seed passes the check before its baseline; an edited seed is refused before any candidate.
+    shutil.move(str(task), tmp_path / "task/harbor-task")
+    (tmp_path / "task/task.py").write_text(
+        "import autoresearch_infrastructure as ari\n\n\n"
+        "def task(run):\n    return ari.bases.harbor_deliverable(run, harbor_task='harbor-task',"
+        " deliverable='/app/output', feedback='/tests/feedback.sh')\n")
+    (tmp_path / "task/local.toml").write_text("reviewer = false\n")
+    recorded = cli("record", tmp_path / "task", "--output", tmp_path / "run", "--config", tmp_path / "task/local.toml",
+                   "--json")
+    assert recorded.returncode == 0, recorded.stderr
+    assert json.loads(recorded.stdout)["candidates"][0]["metrics"] == {"reward": 0.25}
+    (tmp_path / "task/seed/start.txt").write_text("edited\n")
+    refused = cli("record", tmp_path / "task", "--output", tmp_path / "other", "--config",
+                  tmp_path / "task/local.toml", "--json")
+    assert refused.returncode == 2 and "start.txt differs" in refused.stderr
+    assert not list((tmp_path / "other").rglob("candidate-0001"))  # opened, but nothing recorded or graded

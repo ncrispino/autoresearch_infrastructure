@@ -41,7 +41,22 @@ def main(argv=None):
         if name != "sealed":
             command.add_argument("--partial-evidence", type=Path,
                                  help="Inventory of partial native evidence approved by the controller")
+    summary = "Copy the starting deliverable a Harbor task's image ships into a new directory, to use as the seed."
+    command = commands.add_parser("extract-seed", help=summary, description=summary)
+    command.add_argument("harbor_task", type=Path, help="A Harbor task directory")
+    command.add_argument("--deliverable", required=True, help="The container path of the deliverable, such as /app/output")
+    command.add_argument("--output", type=Path, required=True, help="A new directory to write the files into")
     args = parser.parse_args(argv)
+    if args.command == "extract-seed":
+        from .harbor_deliverable import extract_seed
+
+        try:
+            result = extract_seed(args.harbor_task, args.deliverable, args.output)
+        except (ValueError, RuntimeError, OSError) as error:
+            print(f"ari extract-seed: {type(error).__name__}: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["problem"] is None else 1
     if args.command in actions:
         return _task_command(args)
     if args.command == "sealed":

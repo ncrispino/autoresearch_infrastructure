@@ -130,7 +130,8 @@ with agents, and [local.toml](examples/curve-fitting/local.toml) is one without.
 | `ari run TASK --output DIR` | Evaluates the baseline, then starts researchers until a budget runs out. This calls your models. |
 | `ari extend TASK --from SRC --output DIR` | Continues the finished run `SRC` in a new directory with the larger limits of `--config`. Starts nothing; run `ari run` on `DIR` next. See [Extend a finished run](#extend-a-finished-run). |
 | `ari import TASK --from SRC --output DIR` | Starts a new run that reviews and evaluates the candidates of `SRC` again under this task. Starts nothing; `ari run` on `DIR` does the work. |
-| `ari prepare TASK --output DIR` | Builds or resolves the task's Harbor environments and records their images. Starts no agent. `run` and `record` do this first themselves. |
+| `ari prepare TASK --output DIR` | Builds or resolves the task's Harbor environments and, for a Harbor deliverable task, its grader image, and records them. It also checks that the seed is what the task's image ships. Starts no agent. `run` and `record` do this first themselves. |
+| `ari extract-seed HARBOR_TASK --deliverable PATH --output DIR` | Copies what a Harbor task's image holds at `PATH` into the new directory `DIR`, to use as the seed when importing the task. Builds the image and starts nothing. |
 | `ari view DIR --html FILE` | Writes the results as one HTML page. `FILE` must not exist yet. |
 | `ari inspect DIR` | Prints the results as JSON. |
 | `ari sealed DIR` | Prints the held-out rewards that a [Harbor deliverable task](#improve-a-harbor-tasks-deliverable) recorded privately. |
@@ -683,7 +684,8 @@ def task(run):
 | `deliverable` | The container path the grader reads the candidate from. The default is `/workspace/candidate`, the convention for a task written for ARI: the researcher edits that same path, so the instruction is true as written. For a task from elsewhere, pass its own path, such as `/app/output`: the researcher then sees the candidate at that path too. |
 | `feedback` | The grader script whose reward the researcher sees and selection ranks: a path in the grader container. |
 | `sealed` | The grader script whose reward is held out. The default is Harbor's `/tests/test.sh`. `None` means the task has no held-out score. |
-| `seed` | The starting deliverable, a directory relative to the task file. The default is `environment/candidate` in the Harbor task, the directory its Dockerfile copies to `deliverable`, so the files exist once. Without that directory it is `seed/` beside the task file. A starter that a Dockerfile generates during the build is not read from the image: copy it out once. |
+| `seed` | The starting deliverable, a directory relative to the task file. The default is `environment/candidate` in the Harbor task, the directory its Dockerfile copies to `deliverable`, so the files exist once. Without that directory it is `seed/` beside the task file. |
+| `check_seed` | `True` (the default) compares the seed with what the task's image holds at `deliverable` before the baseline, and refuses the run if they differ, naming each file. `False` skips this, to start from files of your own. |
 | `grader` | Where the scripts run. The default is the task's main image. A directory in the Harbor task that holds the grader's own Dockerfile, such as `"environment/grader"`, is built instead. An image pinned by digest is used as it is. |
 | `rules`, `environment` | Lists added to `instruction.md`, which becomes the written objective. Pass `instructions` instead to write all three parts yourself. |
 | `objective`, `rewards` | The default objective is the metric `reward`, higher is better, read from the feedback script's single reward. For other rewards, pass an objective and `rewards={METRIC: "reward_key"}` together. |
@@ -744,6 +746,25 @@ An agent may need something the task's image lacks, such as `tmux` for
 Terminus-2. Build an image from the task's own that adds it, and write
 `image = "sha256:..."` under `[task]` in the run settings. The agents then run
 in that image. The grader still uses the task's own image.
+
+**The starting files.** The researcher's container mounts the candidate over
+whatever the task's image has at the deliverable path, and the grader sees only
+the candidate. Under `harbor run`, by contrast, an agent starts from the
+image's files there. So the seed must be those files, or the run is a
+different task. Before the baseline, ARI copies them out of the image once and
+compares them with the seed, file by file, and refuses the run if they differ.
+When importing a task, `ari extract-seed` writes them for you, which matters
+when the Dockerfile generates the starter instead of copying it from the task
+directory:
+
+```sh
+ari extract-seed my-task/harbor-task --deliverable /app/output --output my-task/seed
+```
+
+It drops links and special files, reports the files it wrote, and says when the
+image has nothing at that path or when a file is not UTF-8 text, which a
+candidate cannot hold. Pass `check_seed=False` to start from files of your own
+instead.
 
 The researcher's candidate is always at `/workspace/candidate/`. When
 `deliverable` is another path, the same directory is also mounted there in the

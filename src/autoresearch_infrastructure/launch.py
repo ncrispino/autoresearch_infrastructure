@@ -501,6 +501,11 @@ def _prepare(run: OpenRun) -> None:
     for environment in (run.environment, run.review_environment):
         if environment is not None:
             harbor_environment.prepare(environment)
+    # An evaluator that needs images or checks of its own, such as a Harbor grader, does them now,
+    # so a failure costs no candidate or start.
+    prepare = getattr(run.task.evaluator, "prepare", None)
+    if callable(prepare):
+        prepare()
 
 
 def record_workspace(run: OpenRun) -> dict:

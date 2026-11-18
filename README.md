@@ -81,7 +81,9 @@ without editing its files: pass `deliverable=` with the path its instruction
 names, such as `/app/output`. The grader and the researcher both see the
 candidate at that path, so a relative path in the deliverable, such as
 `../data`, means the same in both containers. For the researcher it is the same
-directory as `/workspace/candidate/`.
+directory as `/workspace/candidate/`. `ari extract-seed` copies the task's
+starting files out of its image, and every run checks that the seed still
+matches them.
 
 `task.py` can also name the metrics when the grader reports several, a
 `validity` function for rules that code can decide exactly, and `cases` to

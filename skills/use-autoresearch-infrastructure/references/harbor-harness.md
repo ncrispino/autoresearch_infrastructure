@@ -50,7 +50,8 @@ anything.
 
 | `task.py` names | How to find it in the source task |
 | --- | --- |
-| `deliverable` | The directory the instruction tells the agent to write into, such as `/app/output`. Pass `seed` the directory in the task that its Dockerfile copies there, or a `seed/` of your own if the task ships no starting files. The researcher sees the candidate at this path as well as at `/workspace/candidate/`, so the task's relative paths and local tools work unchanged. A task that keeps other files under `/workspace` is refused, because ARI mounts the researcher's workspace there. |
+| `deliverable` | The directory the instruction tells the agent to write into, such as `/app/output`. Confirm it against the path the grader script reads. The researcher sees the candidate at this path as well as at `/workspace/candidate/`, so the task's relative paths and local tools work unchanged. A task that keeps other files under `/workspace` is refused, because ARI mounts the researcher's workspace there. |
+| `seed` | What the task's image holds at the deliverable path. Do not guess it from the Dockerfile: run `ari extract-seed <harbor-task> --deliverable <path> --output <task>/seed`, which writes exactly those files, including ones the Dockerfile generates. The default `seed` then picks the directory up. Every run checks the seed against the image again. |
 | `feedback` | A grader script that scores a split the agent may be shown. Many benchmarks have one for intermediate submissions. If the task has only `tests/test.sh`, divide its hidden instances into two splits once and write a script for each. |
 | `sealed` | The script for the final, hidden split. Never pass the same script as `feedback`. |
 | `rules` | The sentences of `instruction.md` that a candidate could break and someone has to judge. Add your own if the source has none, and say so in the task's README. |
@@ -64,12 +65,14 @@ inside the grader image that do the scoring, and pass `grader=`.
 Check these before a paid run:
 
 1. `ari check` opens the task and builds nothing.
-2. `ari record` with settings that have no agents grades the seed. It needs
+2. `ari prepare` builds the images and checks that the seed matches what the
+   task's image ships. A mismatch names each file that differs.
+3. `ari record` with settings that have no agents grades the seed. It needs
    Docker only. Confirm the reward is the number the source reports for the
    unimproved deliverable.
-3. `ari sealed <dir>` shows that the sealed script ran and gave a different
+4. `ari sealed <dir>` shows that the sealed script ran and gave a different
    number from the feedback script.
-4. Record a known better deliverable, such as the output of the task's
+5. Record a known better deliverable, such as the output of the task's
    `solution/`, and confirm that the reward rises. This is the headroom check.
 
 The researcher and the reviewer run in the task's main container, built from

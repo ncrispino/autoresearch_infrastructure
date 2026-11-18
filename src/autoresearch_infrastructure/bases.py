@@ -67,6 +67,7 @@ def harbor_deliverable(
     feedback_log: bool = False,
     feedback_artifacts: bool = False,
     cases: tuple[str, ...] | list[str] = ("default",),
+    check_seed: bool = True,
 ) -> Task:
     """Improve the deliverable of a Harbor task, scored by that task's own grader.
 
@@ -97,7 +98,12 @@ def harbor_deliverable(
         The starting deliverable, a directory relative to the task file. The
         default is ``environment/candidate`` in the Harbor task, the directory
         its Dockerfile copies to ``deliverable``, or else ``seed/`` beside the
-        task file.
+        task file. Before the first evaluation the seed is compared with what
+        the task's image holds at ``deliverable``, and a run whose seed differs
+        is refused, since the researcher would start from other files than an
+        agent under ``harbor run``. ``ari extract-seed`` writes what the image
+        holds. ``check_seed=False`` skips the comparison, to start from files
+        of your own.
     ``grader``
         Where the scripts run: by default the task's main image; or a directory
         in the Harbor task holding the grader's own Dockerfile; or an image
@@ -140,10 +146,12 @@ def harbor_deliverable(
         shipped = Path(harbor_task) / "environment/candidate"
         seed = shipped if (run.directory / shipped).is_dir() else "seed"
     _free_workspace(task, deliverable, workdir=task_environment)
+    if type(check_seed) is not bool:
+        raise ValueError("check_seed is True or False")
     evaluator = deliverables.HarborGraderEvaluator(
         task=task, deliverable=deliverable, feedback=feedback, sealed=sealed, grader=grader, state=state,
         rewards=rewards, capabilities=capabilities, network=network, feedback_log=feedback_log,
-        feedback_artifacts=feedback_artifacts,
+        feedback_artifacts=feedback_artifacts, seed=run.directory / seed if check_seed else None,
     )
     elsewhere = deliverable.rstrip("/") != _CANDIDATE
     harbor = None

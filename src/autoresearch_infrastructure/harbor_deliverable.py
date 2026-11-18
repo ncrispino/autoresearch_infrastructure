@@ -24,6 +24,8 @@ the researcher's environment.
 
 from __future__ import annotations
 
+import fnmatch
+import hashlib
 import json
 import math
 import re
@@ -36,7 +38,7 @@ from uuid import uuid4
 
 from .api import Evaluation, Metric, MetricSchema
 from .persistence import digest, write_json
-from .source_tree import task_context_digest
+from .source_tree import IGNORED_DIRS, IGNORED_FILES, snapshot, task_context_digest
 
 REWARD = Metric("reward")
 SEALED_RECORD = "sealed.json"
@@ -113,6 +115,11 @@ class HarborGraderEvaluator:
     Each script is told which case it is grading in the environment variable
     ``ARI_CASE``. A task with one case can ignore it.
 
+    ``seed``
+        The starting deliverable to compare with what the task's main image
+        ships at ``deliverable``, or None to skip the comparison. ``prepare``
+        compares them once and refuses a run whose seed differs.
+
     Every evaluation gets a new grader container, which is deleted with
     everything it wrote when the script ends. It has no capabilities beyond
     those named, and the Docker socket and the run directory are never mounted.
@@ -125,7 +132,7 @@ class HarborGraderEvaluator:
     def __init__(self, *, task, deliverable: str, feedback: str, sealed: str | None = None,
                  grader: str | None = None, state: Path, rewards: dict[Metric, str] | None = None,
                  capabilities=(), network: bool = False, feedback_log: bool = False,
-                 feedback_artifacts: bool = False):
+                 feedback_artifacts: bool = False, seed: Path | None = None):
         self.task = Path(task).resolve()
         manifest = self.task / "task.toml"
         if not manifest.is_file():
@@ -145,6 +152,8 @@ class HarborGraderEvaluator:
                 raise ValueError("The sealed script must differ from the feedback script, or the "
                                  "researcher would be shown the sealed score")
         self.grader, self.context = self._grader(grader)
+        self.separate_grader = grader is not None
+        self.seed = None if seed is None else Path(seed).resolve()
         self.timeout = verifier.get("timeout_sec", 600)
         self.env = {**verifier.get("env", {})}
         if any(not isinstance(value, str) or "${" in value for value in self.env.values()):
@@ -216,19 +225,37 @@ class HarborGraderEvaluator:
                 raise ValueError(f"The grader image {saved['image']} is no longer available; "
                                  "load it again (docker load) or use a fresh output")
             return saved["image"]
-        if self.context is None:
-            image, built = self.grader, False
-            if not _image_present(image):
-                _docker(["pull", "--quiet", image])
-        else:
-            with tempfile.TemporaryDirectory(prefix="ari-grader-build-") as scratch:
-                iid = Path(scratch) / "image-id"
-                _docker(["build", "--quiet", "--iidfile", str(iid), str(self.context)])
-                image, built = iid.read_text().strip(), True
-            if not _PINNED.fullmatch(image):
-                raise RuntimeError(f"docker build reported no image ID: {image!r}")
+        image, built = _resolve(self.grader, self.context)
         write_json(self.record, {"definition": self.definition, "image": image, "built": built})
         return image
+
+    def prepare(self) -> None:
+        """Build the grader image, and check once that the seed is what the task's image ships.
+
+        Under ``harbor run`` an agent starts from whatever the task's image has
+        at the deliverable path. Here the researcher and the grader see only
+        the seed, which hides those files, so a seed that differs would make
+        this a different task. Called before the baseline, and again before
+        each evaluation, where it costs nothing once the check is recorded.
+        """
+        image = self.image()
+        if self.seed is None:
+            return
+        saved = json.loads(self.record.read_text())
+        expected = _file_digests(self.seed)
+        if saved.get("seed") == digest(expected):
+            return
+        main = image if not self.separate_grader else _resolve(*_main_image(self.task, self.environment))[0]
+        with tempfile.TemporaryDirectory(prefix="ari-shipped-") as scratch:
+            found = shipped(main, self.deliverable, Path(scratch) / "shipped")
+            differences = _differences(_file_digests(found) if found else {}, expected)
+        if differences:
+            shown = "; ".join(differences[:8]) + (f"; and {len(differences) - 8} more" if len(differences) > 8 else "")
+            raise ValueError(
+                f"The seed {self.seed} is not what the task's image ships at {self.deliverable}: {shown}. "
+                f"Run `ari extract-seed {self.task} --deliverable {self.deliverable} --output DIR` and use DIR as "
+                "the seed, or pass check_seed=False to start from files of your own")
+        write_json(self.record, {**saved, "seed": digest(expected), "seed_checked_against": main})
 
     def grade(self, candidate: Path, script: str, evidence: Path, case: str = "default") -> dict:
         """Run one script on ``candidate`` for ``case`` and return its rewards.
@@ -277,6 +304,7 @@ class HarborGraderEvaluator:
             subprocess.run(["docker", "rm", "--force", "--volumes", name], capture_output=True)
 
     def __call__(self, candidate, context):
+        self.prepare()
         private = context.private_artifacts
         if private is None:
             raise ValueError("Grading needs a private evidence directory for the grader's logs")
@@ -321,6 +349,105 @@ def _rewards(logs: Path) -> dict | None:
     ):
         raise ValueError("A grader must write finite numeric rewards")
     return rewards
+
+
+def _resolve(image: str | None, context: Path | None) -> tuple[str, bool]:
+    """A pinned image, pulled if absent, or the image built from ``context``; and whether it was built."""
+    if context is None:
+        if not _image_present(image):
+            _docker(["pull", "--quiet", image])
+        return image, False
+    with tempfile.TemporaryDirectory(prefix="ari-grader-build-") as scratch:
+        iid = Path(scratch) / "image-id"
+        _docker(["build", "--quiet", "--iidfile", str(iid), str(context)])
+        built = iid.read_text().strip()
+    if not _PINNED.fullmatch(built):
+        raise RuntimeError(f"docker build reported no image ID: {built!r}")
+    return built, True
+
+
+def _main_image(task: Path, environment: dict) -> tuple[str | None, Path | None]:
+    """The task's main image: its pinned ``docker_image``, or the build context ``environment/``."""
+    image = environment.get("docker_image")
+    if image is not None:
+        if not _PINNED.fullmatch(str(image)):
+            raise ValueError("[environment] docker_image must be pinned by digest (sha256:...)")
+        return image, None
+    if not (task / "environment/Dockerfile").is_file():
+        raise ValueError(f"The Harbor task needs {task}/environment/Dockerfile or [environment] docker_image")
+    return None, task / "environment"
+
+
+def shipped(image: str, path: PurePosixPath, destination: Path) -> Path | None:
+    """Copy what ``image`` holds at ``path`` into ``destination``; None when the image has nothing there.
+
+    The image is never run: a container is created, copied from and removed.
+    Links and special files are dropped from the copy.
+    """
+    name = "ari-shipped-" + uuid4().hex[:12]
+    _docker(["create", "--name", name, "--entrypoint", "sh", image])
+    try:
+        copied = subprocess.run(["docker", "cp", f"{name}:{path}/.", str(destination)],
+                                capture_output=True, text=True)
+        if copied.returncode != 0:
+            if "Could not find" in copied.stderr or "No such" in copied.stderr:
+                return None
+            raise RuntimeError(f"docker cp failed: {copied.stderr.strip()[-2000:]}")
+    finally:
+        subprocess.run(["docker", "rm", "--force", name], capture_output=True)
+    _regular_files_only(destination)
+    return destination
+
+
+def extract_seed(task: Path, deliverable: str, destination: Path) -> dict:
+    """Write the starting deliverable a Harbor task's image ships at ``deliverable`` into ``destination``.
+
+    This is the import step for a task whose starter exists only in its image,
+    for example because the Dockerfile generates it. The image is built from
+    ``environment/``, or the pinned ``docker_image`` is used. ``destination``
+    must not exist yet.
+    """
+    task, destination = Path(task).resolve(), Path(destination)
+    if destination.exists():
+        raise ValueError(f"{destination} already exists; name a new directory")
+    environment = tomllib.loads((task / "task.toml").read_text(encoding="utf-8")).get("environment") or {}
+    image, _ = _resolve(*_main_image(task, environment))
+    with tempfile.TemporaryDirectory(prefix="ari-shipped-") as scratch:
+        found = shipped(image, _container_path(deliverable, "deliverable"), Path(scratch) / "shipped")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if found is None:
+            destination.mkdir()
+        else:
+            shutil.copytree(found, destination)
+    try:
+        snapshot(destination)
+        problem = None
+    except ValueError as error:
+        problem = f"{error}. A candidate is a tree of UTF-8 text files, so this starter cannot be one as it is"
+    return {"seed": str(destination), "image": image, "shipped": found is not None,
+            "files": sorted(path.relative_to(destination).as_posix()
+                            for path in destination.rglob("*") if path.is_file()),
+            "problem": problem}
+
+
+def _file_digests(root: Path) -> dict[str, str]:
+    """A hash of every regular file under ``root``, by relative path, skipping what a candidate snapshot skips."""
+    digests = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if any(part in IGNORED_DIRS for part in relative.parts[:-1]) or not path.is_file() or path.is_symlink():
+            continue
+        if any(fnmatch.fnmatchcase(path.name, pattern) for pattern in IGNORED_FILES):
+            continue
+        digests[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return digests
+
+
+def _differences(shipped_files: dict, seed_files: dict) -> list[str]:
+    return ([f"{name} is only in the image" for name in sorted(shipped_files.keys() - seed_files.keys())]
+            + [f"{name} is only in the seed" for name in sorted(seed_files.keys() - shipped_files.keys())]
+            + [f"{name} differs" for name in sorted(shipped_files.keys() & seed_files.keys())
+               if shipped_files[name] != seed_files[name]])
 
 
 def _regular_files_only(root: Path) -> None:
