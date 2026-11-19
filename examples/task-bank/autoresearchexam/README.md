@@ -107,5 +107,9 @@ Codex gives an MCP tool call 300 seconds, and this task's review and grading too
 about 9 minutes, so `record_candidate` timed out on the client side while ARI went on
 to record and grade the candidate. The agent, as the instructions say, did not
 resubmit and ended the session; the next start continued from the recorded
-candidate, so no proposal was lost. A task whose grading takes over 5 minutes needs
-a longer tool timeout in the agent for one session to make every proposal.
+candidate, so no proposal was lost.
+
+ARI now gives Codex's submission tool a timeout as long as the researcher's
+session. cpu-llm-decode-throughput was run again the same way: one researcher start
+made both proposals, with no call timed out. Feedback 0 → 0.107 → 0.116, sealed
+0 → 0.100 → 0.113, in 44 minutes for $0.099 of model cost.
