@@ -1,6 +1,7 @@
 """The ``ari`` command: open a task, run it, and view the results."""
 
 import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -32,16 +33,39 @@ def main(argv=None):
     for name, summary in {
         "view": "Export the results of a run as one HTML page.",
         "inspect": "Print the results of a run as JSON.",
+        "sealed": "Print the held-out rewards a Harbor deliverable task recorded privately, as JSON.",
     }.items():
         command = commands.add_parser(name, help=summary, description=summary)
         command.add_argument("output", type=Path, help="A run directory or an experiment output")
         if name == "view":
             command.add_argument("--html", type=Path, required=True, help="A new file to write")
-        command.add_argument("--partial-evidence", type=Path,
-                             help="Inventory of partial native evidence approved by the controller")
+        if name != "sealed":
+            command.add_argument("--partial-evidence", type=Path,
+                                 help="Inventory of partial native evidence approved by the controller")
+    summary = "Copy the starting deliverable a Harbor task's image ships into a new directory, to use as the seed."
+    command = commands.add_parser("extract-seed", help=summary, description=summary)
+    command.add_argument("harbor_task", type=Path, help="A Harbor task directory")
+    command.add_argument("--deliverable", required=True, help="The container path of the deliverable, such as /app/output")
+    command.add_argument("--output", type=Path, required=True, help="A new directory to write the files into")
+    command.add_argument("--image", help="An image ID to read instead of building the task's image")
     args = parser.parse_args(argv)
+    if args.command == "extract-seed":
+        from .harbor_deliverable import extract_seed
+
+        try:
+            result = extract_seed(args.harbor_task, args.deliverable, args.output, image=args.image)
+        except (ValueError, RuntimeError, OSError) as error:
+            print(f"ari extract-seed: {type(error).__name__}: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["problem"] is None else 1
     if args.command in actions:
         return _task_command(args)
+    if args.command == "sealed":
+        from .harbor_deliverable import sealed_rewards
+
+        print(json.dumps(sealed_rewards(args.output), indent=2))
+        return 0
 
     from .viewer import build_index, write_html_preview
 
@@ -68,7 +92,12 @@ def _task_command(args) -> int:
                                   reevaluates=args.source if args.command == "import" else None,
                                   reviewer_image=args.reviewer_image)
             with run.research:
-                summary = action(run)
+                if args.json:
+                    # Harbor prints progress to stdout; --json promises one JSON document there.
+                    with contextlib.redirect_stdout(sys.stderr):
+                        summary = action(run)
+                else:
+                    summary = action(run)
     except (ValueError, RuntimeError, OSError) as error:
         print(f"ari {args.command}: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

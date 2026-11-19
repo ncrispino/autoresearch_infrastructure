@@ -42,8 +42,20 @@ def researcher_prompt(goal: str, *, parent_id: str, repeats: int, start=None) ->
             rows += ("\n| `/history/conversations/` | The conversations of earlier researchers in this run, "
                      "as ATIF JSON, oldest first. |")
     submissions = 1 if start is None else start.submissions
+    context = start is None or start.context
+    also = None if start is None else start.candidate_at
+    candidate_row = (
+        f"| `/workspace/candidate/` | Your editable solution, copied from `{parent_id}`. Only this directory "
+        "is submitted. |\n" if also is None else
+        f"| `{also}/`, also at `/workspace/candidate/` | Your editable solution, copied from `{parent_id}`. "
+        "The two paths are one directory, not two copies: a change at either is a change at both. Work at "
+        f"`{also}/` as the task's text does, keep scratch files out of it, and do not copy between the two "
+        "paths. Only this directory is submitted. |\n")
     return goal.rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(
+        candidate_row=candidate_row,
         parent_id=parent_id, repeats=repeats, memory_rows=rows, parent_evidence=evidence,
+        context_row="| `/context/` | Read-only task material. |\n" if context else "",
+        readonly="`/context` and `/history` are" if context else "`/history` is",
         after_recording=_ONE_SUBMISSION if submissions == 1 else _SEVERAL_SUBMISSIONS.format(
             limit="as many candidates as the run's budget allows" if submissions is None
             else f"up to {submissions} candidates"),
@@ -116,11 +128,14 @@ class SubmissionRecorder:
                 self.closed = str(stop.value)
         if self.closed:
             return {**result, "next": None, "stopped": self.closed}
-        return {**result, "next": {
-            "parent_id": self.parent_id,
-            "remaining": None if self.limit is None else self.limit - self.attempts,
-            "note": f"/workspace/candidate/ now holds a fresh copy of {self.parent_id}. Edit it and submit again.",
-        }}
+        # Say plainly that the session goes on: a null count read as "none left" ended a real session early.
+        following = {"parent_id": self.parent_id,
+                     "note": f"This session continues. /workspace/candidate/ now holds a fresh copy of "
+                             f"{self.parent_id}, the best candidate so far. Edit it and submit again; the reply to "
+                             "that submission says whether another fits the budget."}
+        if self.limit is not None:
+            following["remaining_in_this_session"] = self.limit - self.attempts
+        return {**result, "next": following}
 
 
 def reset_candidate(research, parent_id: str) -> None:
@@ -187,7 +202,9 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
                 prompt,
                 workspace=research.root / "workspace",
                 evidence=evidence,
-                readonly={context: "/context", (history or research.root / "history"): "/history"},
+                # A task with no context files gets no /context, so the file table lists only what exists.
+                readonly={**({context: "/context"} if any(Path(context).iterdir()) else {}),
+                          (history or research.root / "history"): "/history"},
                 recorder=recorder,
                 jobs_root=research.output / "harbor-jobs",
             )

@@ -374,13 +374,21 @@
       });
       const patch = el("pre");
       const change = () => {
+        const diff = c.comparisons[chooser.value]?.diff_patch;
         patch.textContent =
-          c.comparisons[chooser.value]?.diff_patch ??
-          "Verified comparison unavailable";
+          diff === undefined || diff === null
+            ? "Verified comparison unavailable"
+            : diff === ""
+              ? c.file_count === 0
+                ? "No files: this candidate is empty, and so is the version it is compared with."
+                : "No differences: the two versions have the same files."
+              : diff;
       };
       chooser.onchange = change;
       change();
-      d.append(el("h2", "Compare candidate"), chooser, patch);
+      d.append(el("h2", "Compare candidate"));
+      if (c.file_count === 0) d.append(el("p", "This candidate has no files."));
+      d.append(chooser, patch);
       for (const e of c.evidence) {
         d.append(
           el("h2", "Evaluation · " + e.evaluation),
@@ -437,8 +445,19 @@
               figure.append(image, el("figcaption", cell.key + " · " + artifact.path));
               d.append(figure);
             }
+            const graded = a.result?.metadata;
+            if (graded?.grader_image) {
+              let line = "Graded by the task's own grader · image " + String(graded.grader_image).slice(0, 19) +
+                " · " + graded.grader_cpus + " CPUs";
+              if (graded.task_cpus && graded.grader_cpus < graded.task_cpus)
+                line += ", fewer than the " + graded.task_cpus + " the task asks for";
+              d.append(el("p", line));
+            }
+            if (a.sealed_recorded)
+              d.append(el("p", "A sealed score was recorded privately and is not shown here. " +
+                "`ari sealed <run directory>` prints it."));
             const details = el("details");
-            const { artifact_images, ...attempt } = a;
+            const { artifact_images, sealed_recorded, ...attempt } = a;
             details.append(
               el(
                 "summary",

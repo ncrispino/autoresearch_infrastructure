@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -255,7 +255,10 @@ class _Opening:
 
         def environment_identity(name):
             environment = environments[name]
-            return None if environment is None else digest({"config": environment.config, "files": digests[name]})
+            if environment is None:
+                return None
+            return digest({"config": environment.config, "files": digests[name],
+                           **({"agent_network": environment.agent_network} if environment.agent_network else {})})
 
         plan = _json({
             **self.opened_with,
@@ -268,7 +271,8 @@ class _Opening:
                 "memory": task.memory.identity(digests.get("memory/preloaded"),
                                                summarize=_identity(task.memory.summarize)),
                 "environment": {"harbor": environment_identity("environment"),
-                                "workspace": task.environment.workspace},
+                                "workspace": task.environment.workspace,
+                                "candidate_at": task.environment.candidate_at},
                 "presenter": _identity(task.presenter) or "default",
                 "transforms": [code_identity(transform) for transform in task.transforms],
                 "original_instructions": original.specification() if task.transforms else None,
@@ -289,7 +293,8 @@ class _Opening:
         write_json(output / "plan.json", plan)
         prepared = {
             name: None if environment is None else harbor_environment.HarborEnvironment(
-                environment.config, output / name, output / "prepared" / f"{name}.json")
+                environment.config, output / name, output / "prepared" / f"{name}.json",
+                agent_network=environment.agent_network)
             for name, environment in environments.items()
         }
 
@@ -500,6 +505,11 @@ def _prepare(run: OpenRun) -> None:
     for environment in (run.environment, run.review_environment):
         if environment is not None:
             harbor_environment.prepare(environment)
+    # An evaluator that needs images or checks of its own, such as a Harbor grader, does them now,
+    # so a failure costs no candidate or start.
+    prepare = getattr(run.task.evaluator, "prepare", None)
+    if callable(prepare):
+        prepare()
 
 
 def record_workspace(run: OpenRun) -> dict:
@@ -528,8 +538,10 @@ def run_researchers(run: OpenRun) -> dict:
         raise ValueError("run needs a [researcher] in the settings; use record to evaluate your own edits")
     from .coding_agent import CodingAgent
 
-    agent = (CodingAgent(agent=settings.researcher, image=run.image) if run.environment is None
-             else CodingAgent(agent=settings.researcher, environment=run.environment))
+    where = {"image": run.image} if run.environment is None else {"environment": run.environment}
+    if run.task.environment.candidate_at is not None:
+        where["candidate_at"] = run.task.environment.candidate_at
+    agent = CodingAgent(agent=settings.researcher, **where)
     inputs = run.inputs
     present_start = run.task.presenter or present
     repeats = settings.repeats
@@ -565,6 +577,8 @@ def run_researchers(run: OpenRun) -> dict:
                 return following
 
             start, history, manifest = view(parent)
+            start = replace(start, context=any(run.context.iterdir()),
+                            candidate_at=run.task.environment.candidate_at)
             try:
                 prompt = present_start(inputs, start)
                 if not isinstance(prompt, str) or not prompt.strip():

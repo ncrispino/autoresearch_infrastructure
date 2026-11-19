@@ -134,3 +134,24 @@ def test_public_validity_records_are_binary():
         ValidityVerdict(HASH_A, HASH_B, "inconclusive", ("uncertain",), ())
     with pytest.raises(ValueError):
         ValidityCheck("scope", "inconclusive", ())
+
+
+def test_an_empty_candidate_may_be_cited_as_a_whole_and_nothing_else_may(tmp_path):
+    empty = tmp_path / "empty-candidate"
+    empty.mkdir()
+    value = payload()
+    for check in value["checks"]:
+        check["evidence_paths"] = ["/review/candidate"]
+    path = tmp_path / "verdict.json"
+    write_json(path, value)
+    verdict = read_verdict(path, HASH_A, HASH_B, CRITERIA, {"/review/candidate": empty})
+    assert verdict.verdict == "valid"
+    (empty / "select_subset.py").write_text("def select(): ...\n")  # once it holds a file, cite the file
+    with pytest.raises(VerdictError, match="unsafe_evidence_file"):
+        read_verdict(path, HASH_A, HASH_B, CRITERIA, {"/review/candidate": empty})
+    (empty / "select_subset.py").unlink()
+    (empty / "nested").mkdir()
+    value["checks"][0]["evidence_paths"] = ["/review/candidate/nested"]  # only the root, never a subdirectory
+    write_json(path, value)
+    with pytest.raises(VerdictError, match="unsafe_evidence_file"):
+        read_verdict(path, HASH_A, HASH_B, CRITERIA, {"/review/candidate": empty})

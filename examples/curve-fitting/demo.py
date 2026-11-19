@@ -1,5 +1,7 @@
 """Scripted proposals for the curve-fitting task: no agents and no model calls.
 
+The Harbor task's grader scores each proposal in a container, so this needs Docker.
+
 Records the zero baseline, three least-squares fits, and one out-of-range
 proposal that the validity check rejects.
 """
@@ -39,8 +41,8 @@ def main(argv=None):
     if args.output.exists():
         parser.error("the demo needs a new output directory")
     run = open_run(HERE, HERE / "local.toml", args.output, image=None)
-    # Read the observations where a researcher would: the run's read-only context.
-    observations = json.loads((run.context / "task.json").read_text())["observations"]
+    # The observations a researcher reads in its container at /app/data/observations.json.
+    observations = json.loads((HERE / "harbor-task/environment/observations.json").read_text())["observations"]
     proposals = (
         ([0.0], "Baseline: predict zero"),
         (least_squares(observations, 0), "Fit a constant to the observations"),

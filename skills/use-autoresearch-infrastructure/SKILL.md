@@ -61,8 +61,28 @@ description, follow [Break an existing task down](references/importing-tasks.md)
 It gives the method for sorting a source task into ARI's parts and three worked
 case studies.
 
-An `ari.Task` has four parts and several optional ones. Answer every row before
-writing code.
+Write the task as a Harbor task: a directory with an instruction, a container
+and a grader, and a short `task.py` beside it that calls
+`ari.bases.harbor_deliverable`. Answer every row before writing code.
+
+| Part | Where it goes | Write down |
+| --- | --- | --- |
+| Objective | `instruction.md` | Which files in `/workspace/candidate` change, what form they take, which number should move and how it is measured. Name other files, such as data, by absolute path outside `/workspace`: a deliverable that reads `../data` finds different things in the researcher's container and the grader's. |
+| Starting files | `environment/candidate/`, copied by the Dockerfile to `/workspace/candidate` | The unimproved deliverable. Unchanged, it is the baseline. |
+| Container | `environment/Dockerfile` | What the researcher needs beside the deliverable: data, tools. Pin `FROM` by digest. Nothing of the grader. |
+| Grader | A script in `tests/` | It reads `/workspace/candidate`, and writes one number to `/logs/verifier/reward.txt` or several to `reward.json`. Name every fixed input it uses. |
+| Held-out score | A second script in `tests/` | Only if some data must stay hidden from the researcher. Then `feedback` scores the public split and `sealed` the hidden one. Otherwise pass the one script as `feedback` and `sealed=None`. |
+| Rules | `rules=[...]` in `task.py` | Everything a candidate must and must not do; the reviewer checks each one separately. |
+| Metrics | `objective` and `rewards` in `task.py` | Only when the grader writes more than one reward: which one ranks candidates and its direction. |
+| `validity` (optional) | A function in `task.py` | The rules a function can decide exactly: file names, schema, value ranges. |
+| `cases` (optional) | `cases=(...)` in `task.py` | The names of the fixed inputs every candidate is graded on. The scripts read the name from `ARI_CASE`. |
+
+[Harbor tasks](references/harbor-harness.md#improve-a-harbor-tasks-deliverable)
+describes this base task and how to check it before a paid run.
+
+The base task builds an `ari.Task`. Write one directly, with a Python function
+as the evaluator, only when no container is needed or no base task fits. It has
+four parts and several optional ones:
 
 | `Task` part | Write down |
 | --- | --- |
@@ -81,7 +101,7 @@ The [reference](../../reference.md#researcher-inputs) describes each.
 | `Task` part | Use it when the user wants |
 | --- | --- |
 | `memory=ari.Memory(...)` | Researchers to see fewer earlier candidates (`history`), records from an earlier run (`preload`), earlier researchers' conversations as files, or one researcher session that makes several proposals in a row (`conversations`, `conversation_mode`; raise the researcher's time limit to fit), or a research log or summary (`log`, `summarize`). By default each researcher is a fresh conversation that sees every earlier candidate. |
-| `environment=ari.Environment(...)` | The researcher to run in a Harbor environment with its own Dockerfile or services (`harbor`), or to start with no files left by earlier researchers (`workspace="reset"`). |
+| `environment=ari.Environment(...)` | The researcher to run in a Harbor environment with its own Dockerfile or services (`harbor`), to start with no files left by earlier researchers (`workspace="reset"`), or to see the candidate at a second path that its files expect to run from (`candidate_at`). |
 | `review_environment` | The reviewer to run in its own Harbor environment. |
 | `transforms=[...]` | A study that changes what the researcher is told, such as `ari.transforms.omit_rule(2)`. The reviewer judges the changed rules; the plan keeps the original text. |
 | `presenter` | A different wording or order of the prompt. |
@@ -99,18 +119,20 @@ Then copy the closest example directory and edit it.
 
 | What changes | What stays fixed | Copy | Built with |
 | --- | --- | --- | --- |
-| A configuration, data file or implementation measured by your own Python | The workload and the evaluator | [examples/curve-fitting](../../examples/curve-fitting/README.md) | `ari.Task` |
+| A configuration, data file or implementation, graded by a script | The Harbor task and its grader | [examples/curve-fitting](../../examples/curve-fitting/README.md) | `ari.bases.harbor_deliverable` |
+| The same, with a score that must stay hidden from the researcher, such as an imported benchmark task | The Harbor task, its grader and both splits | [examples/threshold-deliverable](../../examples/threshold-deliverable/README.md) | `ari.bases.harbor_deliverable` |
 | Files of a Harbor task, such as its instructions | The solver and the Harbor task's grader | [examples/sum-instructions](../../examples/sum-instructions/README.md) | `ari.bases.harbor_task_files` |
 | The solver harness: its program, prompts, skills and hooks | The Harbor tasks, their graders and the model | [examples/sum-harness](../../examples/sum-harness/README.md) | `ari.bases.harbor_harness` |
+| Something small that a few lines of Python can score with no container | The evaluator function | [examples/packing](../../examples/packing/task.py) | `ari.Task` |
 
 A "Harbor task" is Harbor's own unit: a directory with `task.toml`,
 `instruction.md`, an environment and tests. One task can evaluate many Harbor
-tasks as its cases. The two functions in `ari.bases` each return a complete
+tasks as its cases. The three functions in `ari.bases` each return a complete
 `ari.Task` from your Harbor tasks, so a Harbor `task.py` is a few lines.
 
 [Design a task](references/task-integration.md) explains these decisions and
 how to test a task before a search.
-[Harbor tasks](references/harbor-harness.md) covers the two functions in
+[Harbor tasks](references/harbor-harness.md) covers the three functions in
 `ari.bases`.
 
 Validity and quality are separate questions. The validity function and the reviewer decide

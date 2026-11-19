@@ -1,0 +1,23 @@
+# One researcher session for the benchmark's 24 hours, as AutoResearchExam runs an agent.
+[limits]
+candidates = 41              # the baseline plus up to 40 submissions
+evaluations = 41
+
+[researcher]
+name = "terminus-2"
+model_name = "anthropic/claude-opus-5-5"
+override_timeout_sec = 86400
+[researcher.kwargs]
+record_terminal_session = false
+
+[reviewer]                   # its own table: a reviewer's timeout is at most 7200
+name = "terminus-2"
+model_name = "anthropic/claude-opus-5-5"
+override_timeout_sec = 600
+[reviewer.kwargs]
+record_terminal_session = false
+
+# [task]
+# allowed_hosts = ["openrouter.ai"]  # for an agent that calls a provider the task's allowlist lacks
+# grader_image = "sha256:..."   # optional: a prebuilt grader image
+# image = "sha256:..."          # optional: a prebuilt main image. The task's own already has tmux.

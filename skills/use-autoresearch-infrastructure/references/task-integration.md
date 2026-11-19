@@ -1,7 +1,14 @@
 # Design a task
 
-A task is a Python file, `task.py`, whose `task(run)` function returns an
-`ari.Task`. A task has four parts:
+Most tasks are a Harbor task directory with a short `task.py` that calls
+`ari.bases.harbor_deliverable`; [Harbor tasks](harbor-harness.md) covers that
+layout. The decisions in this guide are the same either way: the objective, the
+evaluator (for a Harbor task, its grader script), validity, the instructions
+and how to test. Where it says "evaluator", a Harbor task's grader script plays
+that part, and returns its numbers by writing the reward file.
+
+Underneath, a task is a Python file, `task.py`, whose `task(run)` function
+returns an `ari.Task`. A task has four parts:
 
 | Part | What it is |
 | --- | --- |
@@ -14,9 +21,12 @@ Three optional parts refine them: `validity`, `cases` and `context`. The
 [API reference](../../../reference.md) lists every signature. This guide is
 about the decisions behind them. Start from the closest example:
 
-- [packing/task.py](../../../examples/packing/task.py): the shortest complete task.
-- [curve-fitting/task.py](../../../examples/curve-fitting/task.py): keeps its
-  instructions in a file, records extra metrics and saves a plot.
+- [curve-fitting/task.py](../../../examples/curve-fitting/task.py): a Harbor task
+  graded by its own script, with extra metrics, a validity function and a plot.
+- [threshold-deliverable/task.py](../../../examples/threshold-deliverable/task.py):
+  a Harbor task with a score that is held out from the researcher.
+- [packing/task.py](../../../examples/packing/task.py): the shortest task with a
+  Python evaluator and no container.
 - [sum-instructions/task.py](../../../examples/sum-instructions/task.py) and
   [sum-harness/task.py](../../../examples/sum-harness/task.py): tasks measured on
   Harbor tasks, each built with one call to `ari.bases`. See
@@ -63,10 +73,14 @@ Decide how it ends in each situation:
 
 ARI never imports or runs candidate files. If your evaluator executes candidate
 code, it must isolate that execution itself, for example in a container. Parsing
-a candidate's JSON on the host, as the curve-fitting evaluator does, is safe.
+a candidate's JSON on the host, as the packing evaluator does, is safe. A Harbor
+task's grader always runs in its own container, so it may execute the
+deliverable.
 
 Save files that explain a score, such as plots or logs, under
-`context.artifacts`. The researcher can read them in later sessions.
+`context.artifacts`. The researcher can read them in later sessions. A Harbor
+grader writes them under `/logs/artifacts`, and the task passes
+`feedback_artifacts=True`.
 
 ## Validity: the function and the reviewer
 
@@ -119,9 +133,11 @@ Write the instructions in two sections.
   do; the reviewer judges these. **Environment** is what the sandbox enforces
   whatever the researcher does.
 
-[curve-fitting/instructions.md](../../../examples/curve-fitting/instructions.md)
+[cpu-llm-decode-throughput.md](import-examples/cpu-llm-decode-throughput.md)
 is a complete example. The same three things can be given in Python as
-`ari.Instructions(objective=..., rules=[...], environment=[...])`.
+`ari.Instructions(objective=..., rules=[...], environment=[...])`. For a Harbor
+task, `instruction.md` is the Objective and `task.py` passes the Rules as a
+list, as [curve-fitting/task.py](../../../examples/curve-fitting/task.py) does.
 
 ARI lays the instructions out the same way for every task and adds what the task already knows: the starting files, the metric and its direction, tie-breakers, bounds, and the number of cases and repeats. Do not restate the direction in prose. Any other heading at those levels is refused, so a misplaced
 section is never silently ignored.
@@ -151,7 +167,8 @@ constant changes the task file, which ARI does detect.
 2. Run `ari record` with run settings that have no agents and say
    `reviewer = false`, like
    [curve-fitting/local.toml](../../../examples/curve-fitting/local.toml). The
-   first call measures the baseline and prints the workspace directory.
+   first call measures the baseline and prints the workspace directory. For a
+   Harbor task it also builds the grader's image, so it needs Docker.
 3. Edit the workspace and record again for each of these. A known good change
    should score better. A forbidden change should be rejected by the validity function. A
    poor but allowed change should be measured with a low score.

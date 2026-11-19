@@ -1,6 +1,11 @@
-"""Fixture evidence: every packaged example opens and its scripted demo runs. No Docker or model calls."""
+"""Fixture evidence: every packaged example opens and its scripted demo runs. No model calls.
+
+The curve-fitting task is a Harbor task, so the two tests that grade it need
+Docker; opt in with COEVOLUTION_DOCKER_TESTS=1.
+"""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -11,20 +16,23 @@ import pytest
 EXAMPLES = Path(__file__).parents[1] / "examples"
 IMAGE = "sha256:" + "a" * 64
 TASK_IMAGE = "sha256:" + "b" * 64
+docker = pytest.mark.skipif(os.environ.get("COEVOLUTION_DOCKER_TESTS") != "1",
+                            reason="opt-in: the curve-fitting grader runs in Docker")
 
 
 def ari(command, task, output, *extra):
     return subprocess.run(
         [sys.executable, "-m", "autoresearch_infrastructure.cli", command, str(task),
          "--output", str(output), "--json", *map(str, extra)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=300,
     )
 
 
+@docker
 def test_curve_demo_measures_each_fit_and_rejects_the_out_of_range_proposal(tmp_path):
     result = subprocess.run(
         [sys.executable, str(EXAMPLES / "curve-fitting/demo.py"), "--output", str(tmp_path / "demo"), "--json"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=300,
     )
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout)
@@ -34,14 +42,16 @@ def test_curve_demo_measures_each_fit_and_rejects_the_out_of_range_proposal(tmp_
     assert rows[-1]["status"] == "invalid" and rows[-1]["evaluation"] == "not_started"
     assert summary["selected"] == "candidate-0004"
     assert summary["budget"]["evaluations"]["used"] == 4
-    artifacts = list((tmp_path / "demo").rglob("residuals.json"))
-    assert len(artifacts) == 4
+    # The grader's files are published to the researcher's history, not kept private.
+    artifacts = list((tmp_path / "demo/research/sessions/research/history").rglob("residuals.json"))
+    assert len(artifacts) == 4 and not list((tmp_path / "demo").rglob("private/**/residuals.json"))
     for artifact in artifacts:
         assert len(json.loads(artifact.read_text())["observations"]) == 13
         assert artifact.with_name("fit.svg").read_text().startswith("<svg xmlns=")
     assert Path(summary["viewer"]).is_file()
 
 
+@docker
 def test_a_copied_curve_task_records_manual_edits(tmp_path):
     task = tmp_path / "my-task"
     shutil.copytree(EXAMPLES / "curve-fitting", task, ignore=shutil.ignore_patterns("__pycache__"))
@@ -66,7 +76,7 @@ def test_a_copied_curve_task_records_manual_edits(tmp_path):
 
 def test_curve_live_settings_open_without_credentials_or_starts(tmp_path):
     pytest.importorskip("harbor")
-    result = ari("check", EXAMPLES / "curve-fitting", tmp_path / "live", "--image", IMAGE)
+    result = ari("check", EXAMPLES / "curve-fitting", tmp_path / "live")  # no --image: the task's own container
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout)
     assert summary["starts"] == {"researcher": 0, "reviewer": 0}
@@ -78,12 +88,16 @@ def test_curve_live_settings_open_without_credentials_or_starts(tmp_path):
     assert plan["settings"]["reviewer"]["override_timeout_sec"] == 120
     assert "## Objective" in plan["instructions"] and "- Score: `rmse`. Lower is better." in plan["instructions"]
     assert "Also recorded, without affecting selection: `max_error`, `coefficients`." in plan["instructions"]
+    assert "`/app/data/observations.json`" in plan["instructions"]
+    assert "- Keep scripts and scratch files out of the candidate directory." in plan["instructions"]
     assert plan["settings"]["reviewer"]["name"] == "terminus-2"
-    task = json.loads((tmp_path / "live/context/task.json").read_text())
-    assert len(task["observations"]) == 13
-    missing_image = ari("check", EXAMPLES / "curve-fitting", tmp_path / "no-image")
-    assert missing_image.returncode == 2 and "--image" in missing_image.stderr
-    assert not (tmp_path / "no-image").exists()
+    # Both agents get the Harbor task's container, with the observations and without the grader.
+    assert summary["environments"] == {"researcher": "not prepared", "reviewer": "not prepared"}
+    for role in ("environment", "review-environment"):
+        staged = tmp_path / "live" / role
+        assert len(json.loads((staged / "observations.json").read_text())["observations"]) == 13
+        assert (staged / "Dockerfile").is_file() and not list(staged.rglob("grade.py"))
+    assert not list((tmp_path / "live/context").iterdir())
 
 
 def test_packing_demo_selects_the_best_selection_within_the_weight_limit(tmp_path):

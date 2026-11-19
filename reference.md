@@ -9,7 +9,16 @@ drive an experiment from your own Python, see
 import autoresearch_infrastructure as ari
 ```
 
-## Define a task
+## Define a task in Python
+
+Most tasks are a Harbor task directory with a short `task.py` that calls a
+[Harbor base task](#harbor-base-tasks); start there. This section describes the
+interface those base tasks are built on: `ari.Task`, with an evaluator that is a
+Python function ARI calls on the host. Use it directly when no base task fits,
+or for a small problem where a container would add nothing. It needs neither
+Docker nor Harbor.
+
+![task.py holds the task, run.toml says who runs it, and the ari commands read both and write the results. The researcher reads the objective and constraints you wrote, plus what is measured and how to submit, which ARI adds.](docs/assets/experiment-parts.svg)
 
 A task is a file, `task.py`, that defines `task(run)` and returns an `ari.Task`.
 
@@ -71,8 +80,8 @@ Six more are optional:
 the parsed run settings, `run.output` is the run directory and `run.image` is the
 `--image` value. `task.py` can import modules beside it.
 
-To build a task on Harbor tasks, call a [Harbor base task](#harbor-base-tasks)
-in place of `ari.Task`.
+A [Harbor base task](#harbor-base-tasks) returns an `ari.Task` built this way,
+with the Harbor task's grader as the evaluator.
 
 ## Run settings
 
@@ -102,7 +111,11 @@ one researcher start for each candidate after the baseline. See
 [Starts and the ledger](#starts-and-the-ledger).
 
 The researcher's timeout (`override_timeout_sec`) defaults to 600 seconds and the
-reviewer's to 240. The maximum is 7200. The researcher must be a Harbor agent
+reviewer's to 240. The reviewer's maximum is 7200 seconds. The researcher's is
+86400, a day, for one session that makes every proposal of a run; see
+[A benchmark's time budget](#a-benchmarks-time-budget). A reviewer that defaults
+to the researcher's agent cannot inherit a timeout over 7200, so give it its own
+`[reviewer]` table. The researcher must be a Harbor agent
 that supports MCP servers and ATIF trajectories. Credentials and agent options
 use Harbor's own configuration. The
 [curve-fitting settings](examples/curve-fitting/run.toml) are a complete example
@@ -117,9 +130,11 @@ with agents, and [local.toml](examples/curve-fitting/local.toml) is one without.
 | `ari run TASK --output DIR` | Evaluates the baseline, then starts researchers until a budget runs out. This calls your models. |
 | `ari extend TASK --from SRC --output DIR` | Continues the finished run `SRC` in a new directory with the larger limits of `--config`. Starts nothing; run `ari run` on `DIR` next. See [Extend a finished run](#extend-a-finished-run). |
 | `ari import TASK --from SRC --output DIR` | Starts a new run that reviews and evaluates the candidates of `SRC` again under this task. Starts nothing; `ari run` on `DIR` does the work. |
-| `ari prepare TASK --output DIR` | Builds or resolves the task's Harbor environments and records their images. Starts no agent. `run` and `record` do this first themselves. |
+| `ari prepare TASK --output DIR` | Builds or resolves the task's Harbor environments and, for a Harbor deliverable task, its grader image, and records them. It also checks that the seed is what the task's image ships. Starts no agent. `run` and `record` do this first themselves. |
+| `ari extract-seed HARBOR_TASK --deliverable PATH --output DIR` | Copies what a Harbor task's image holds at `PATH` into the new directory `DIR`, to use as the seed when importing the task. Builds the image and starts nothing. |
 | `ari view DIR --html FILE` | Writes the results as one HTML page. `FILE` must not exist yet. |
 | `ari inspect DIR` | Prints the results as JSON. |
+| `ari sealed DIR` | Prints the held-out rewards that a [Harbor deliverable task](#improve-a-harbor-tasks-deliverable) recorded privately. |
 
 `TASK` is a directory containing `task.py`, or the file itself. `DIR` is the run
 directory. The commands that open a task also take:
@@ -164,9 +179,8 @@ Three ways to reuse a run differ in what they keep:
 | To judge saved candidates under a changed evaluator or rules | `ari import` into a new directory | The source's candidates are recorded again with the same IDs, parents and proposals, then reviewed and evaluated under the new task before any researcher starts. No evidence is reused, and the new run's limits pay for it. |
 
 ```sh
-ari extend examples/curve-fitting --from runs/curve --output runs/curve-more \
-  --config more.toml --image <image-id>
-ari run examples/curve-fitting --output runs/curve-more --image <image-id>
+ari extend examples/curve-fitting --from runs/curve --output runs/curve-more --config more.toml
+ari run examples/curve-fitting --output runs/curve-more
 ```
 
 The limits in `more.toml` are cumulative totals, not additions, and may not be
@@ -205,6 +219,7 @@ DIR/
   environment/       the researcher's Harbor environment, when the task has one
   review-environment/  the reviewer's Harbor environment, when the task has one
   prepared/          the image identities each environment was prepared with
+  harbor-deliverable/  a Harbor deliverable task's grader image record and derived agent environment
   research/          the ari.Research output
     state.json
     sessions/research/
@@ -618,16 +633,17 @@ recorded.
 ## Harbor base tasks
 
 A Harbor task is Harbor's unit: an instruction, a container and tests. `ari.bases`
-holds two base tasks for experiments on Harbor tasks. Each is a function that
+holds three base tasks for experiments on Harbor tasks. Each is a function that
 returns a complete `ari.Task`, so a task file is a few lines. Start here for any
 experiment that a Harbor task's own grader scores.
 
-| Base task | A candidate is | What stays fixed |
-| --- | --- | --- |
-| `ari.bases.harbor_task_files` | Files of the Harbor tasks, such as `instruction.md`. | The solver. |
-| `ari.bases.harbor_harness` | The solver's harness. | The Harbor tasks. |
+| Base task | A candidate is | What stays fixed | Starts a solver |
+| --- | --- | --- | --- |
+| `ari.bases.harbor_deliverable` | The deliverable the Harbor task asks for. | The Harbor task and its grader. | No |
+| `ari.bases.harbor_task_files` | Files of the Harbor tasks, such as `instruction.md`. | The solver. | Yes |
+| `ari.bases.harbor_harness` | The solver's harness. | The Harbor tasks. | Yes |
 
-Both base tasks do the following:
+The two that start a solver do the following:
 
 - They read the solver from `[task.solver]` in the run settings.
 - They use each key of `harbor_tasks` as a case name.
@@ -637,6 +653,180 @@ Both base tasks do the following:
   image, write `image = "sha256:..."` under `[task]`.
 
 They need Docker and the `harbor` extra, which installs Harbor 0.24.0.
+`harbor_deliverable` needs Docker to grade, and the `harbor` extra only when
+the settings name a researcher or a reviewer.
+
+### Improve a Harbor task's deliverable
+
+Use this for a Harbor task in which the agent writes files into one directory
+and the task's grader scores them, which is the shape of most published
+autoresearch tasks. The Harbor task directory is used as it is.
+
+![The files of a Harbor deliverable task and where each one is used at run time.](docs/assets/harbor-deliverable.svg)
+
+```python
+import autoresearch_infrastructure as ari
+
+
+def task(run):
+    return ari.bases.harbor_deliverable(
+        run,
+        harbor_task="harbor-task",
+        feedback="/tests/feedback.sh",
+        sealed="/tests/test.sh",
+        rules=["The deliverable is the single file `model.json`."],
+    )
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `harbor_task` | The Harbor task directory. |
+| `deliverable` | The container path the grader reads the candidate from. The default is `/workspace/candidate`, the convention for a task written for ARI: the researcher edits that same path, so the instruction is true as written. For a task from elsewhere, pass its own path, such as `/app/output`: the researcher then sees the candidate at that path too. |
+| `feedback` | The grader script whose reward the researcher sees and selection ranks: a path in the grader container. |
+| `sealed` | The grader script whose reward is held out. The default is Harbor's `/tests/test.sh`. `None` means the task has no held-out score. |
+| `seed` | The starting deliverable, a directory relative to the task file. The default is `environment/candidate` in the Harbor task, the directory its Dockerfile copies to `deliverable`, so the files exist once. Without that directory it is `seed/` beside the task file. |
+| `check_seed` | `True` (the default) compares the seed with what the task's image holds at `deliverable` before the baseline, and refuses the run if they differ, naming each file. `False` skips this, to start from files of your own. |
+| `grader` | Where the scripts run. The default is the task's main image, with the task's `tests/` mounted at `/tests`. A directory in the Harbor task that holds the grader's own Dockerfile, such as `"environment/grader"`, is built instead, or an image pinned by digest is used; either is used as it is, with nothing mounted at `/tests`, and the scripts are paths inside it that are checked before the baseline. Name the directory even when its image is already built, and give that image as `grader_image = "sha256:..."` under `[task]`, so that the directory is still left out of the agents' container. |
+| `rules`, `environment` | Lists added to `instruction.md`, which becomes the written objective. Pass `instructions` instead to write all three parts yourself. |
+| `objective`, `rewards` | The default objective is the metric `reward`, higher is better, read from the feedback script's single reward. For other rewards, pass an objective and `rewards={METRIC: "reward_key"}` together. |
+| `validity` | An optional validity function. |
+| `task_environment` | `True` (the default) runs the researcher and the reviewer in the Harbor task's main container. `False` runs them in `--image`. |
+| `cases` | Names of the fixed inputs every candidate is graded on. Each is a separate run of the scripts, which read the name from the environment variable `ARI_CASE`. The default is one case. |
+| `feedback_artifacts` | `True` shows the researcher the files the feedback script writes under `/logs/artifacts`, such as a plot. Off, they stay in the private evidence. The sealed script's files are always private. |
+| `private` | More paths in the Harbor task to keep out of the agents' container. |
+| `memory` | An `ari.Memory`, as in `ari.Task`. |
+| `capabilities`, `network`, `feedback_log` | Loosen the grader container: Linux capabilities to keep, the default Docker network, and publishing the feedback script's output to the researcher. All are off by default. |
+
+**The grader.** Each evaluation starts a new container from the grader image, with the task's `[environment]` CPUs and memory. A task asking for more CPUs than the machine has is refused when it opens, because a grader with time limits scores differently on fewer; `cpus = N` under `[task]` accepts fewer for the grader and the agents' container, and each evaluation records the number the grader used. It mounts the saved candidate read-only at `deliverable`, and the Harbor task's
+`tests/` read-only at `/tests` when the grader is the task's main image, then
+runs the feedback script. The script writes
+`/logs/verifier/reward.txt` (one number) or `reward.json` (a mapping), as for
+Harbor's verifier. Then the sealed script runs the same way in a second
+container. Both containers are deleted with everything they wrote. If the process dies first, as when the machine restarts, the next process to grade the run removes what it left: every grader container carries a label naming its run. The interrupted evaluation is recorded as incomplete, with no score. They have no
+network and no capabilities unless you add them, a memory and CPU limit from
+`task.toml`, and the time limit of `[verifier] timeout_sec`. A script that
+writes no reward leaves the evaluation unfinished. The image is built once, on
+the first evaluation, and its ID is recorded in
+`harbor-deliverable/grader.json`; `ari check` builds nothing.
+
+Harbor's verifier is not used, because it runs a task's one test script once,
+after the agent stops. ARI runs the two scripts itself with `docker`. Scripts
+are run with `bash`, or `sh` in an image without it.
+
+**The held-out score.** The researcher sees only the feedback reward, and
+selection ranks candidates only by it. The sealed reward and the logs of both
+scripts are written to the evaluation's private evidence, under
+`research/sessions/research/private/`, which is never mounted in a container
+and is not in `summary.json` or the viewer. `ari sealed DIR` prints the sealed
+reward of every evaluation. Three limits apply:
+
+- A candidate that review judged invalid is never graded, so it has no sealed
+  reward.
+- A grader usually executes the deliverable beside its hidden data. The two
+  rewards are the only things returned, so a deliverable that reads that data
+  can leak it only through the feedback reward. `feedback_log=True` adds the
+  feedback script's output and should stay off unless that output is safe.
+- A Harbor task that ships one hidden test set has nothing to seal. Divide its
+  instances into a feedback split and a sealed split once, before any run, and
+  write one script for each.
+
+**The agents' container.** With `task_environment=True` the researcher and the
+reviewer run in a [Harbor environment](#environment) derived from the task:
+its `[environment]` table and its `environment/` directory. Left out are the
+task's `docker-compose.yaml`, which starts the benchmark's own grader services
+and submission tool, the task's MCP servers, the `grader` directory and every
+path in `private`. The image is built from that reduced copy, so a Dockerfile
+that copies a left-out path fails to build instead of handing the grader to the
+researcher. `tests/` and `solution/` are outside `environment/` and are never
+part of it. As for any Harbor environment, Dockerfile `FROM` lines must be
+pinned by digest; a task whose Dockerfile is not pinned needs that one edit, or
+`task_environment=False` with an `--image` you built from it.
+
+**The agents' network.** The task's `[agent]` network policy is kept, so the
+researcher and the reviewer can reach what an agent under `harbor run` can,
+and only while they work. Hosts that name the task's own compose services,
+such as `grader`, are dropped, since those services are not started. The
+instructions say what the network reaches. An agent that calls its model from
+inside the container, such as Codex or Claude Code, needs its provider's host
+on the allowlist; add it under `[task]` as `allowed_hosts = ["openrouter.ai"]`.
+Terminus-2 calls its model from the host and needs nothing added.
+
+An agent may need something the task's image lacks, such as `tmux` for
+Terminus-2. Build an image from the task's own that adds it, and write
+`image = "sha256:..."` under `[task]` in the run settings. The agents then run
+in that image. The grader still uses the task's own image.
+
+**The starting files.** The researcher's container mounts the candidate over
+whatever the task's image has at the deliverable path, and the grader sees only
+the candidate. Under `harbor run`, by contrast, an agent starts from the
+image's files there. So the seed must be those files, or the run is a
+different task. Before the baseline, ARI copies them out of the image once and
+compares them with the seed, file by file, and refuses the run if they differ. With `[task] image` set, it reads that image instead of building the task's.
+When importing a task, `ari extract-seed` writes them for you, which matters
+when the Dockerfile generates the starter instead of copying it from the task
+directory:
+
+```sh
+ari extract-seed my-task/harbor-task --deliverable /app/output --output my-task/seed
+```
+
+`--image sha256:...` reads an image already built instead of building one.
+
+It drops links and special files, reports the files it wrote, and says when the
+image has nothing at that path or when a file is not UTF-8 text, which a
+candidate cannot hold. Pass `check_seed=False` to start from files of your own
+instead.
+
+The researcher's candidate is always at `/workspace/candidate/`. When
+`deliverable` is another path, the same directory is also mounted there in the
+researcher's container, and the instructions say that the two paths are one
+directory. A deliverable written to run from the task's own place then behaves
+for the researcher as it does for the grader: `../data` from `/app/output` is
+`/app/data` in both. This is `ari.Environment(candidate_at=...)`, which any task
+can set. The instructions also say that `record_candidate` replaces the task's
+own submission tool.
+
+ARI mounts the researcher's workspace over `/workspace`, which would hide
+anything else a task's image keeps there. A `deliverable` under `/workspace`
+other than `/workspace/candidate` is refused, and so is a task whose `workdir`
+is under `/workspace` unless `task_environment=False`. In a task that follows
+the convention, the deliverable should reach other files by absolute path, such
+as `/app/data`, because `/workspace` holds different things for the researcher
+and for the grader. Review needs at least one rule, which a Harbor instruction
+does not list: pass `rules`, or write `reviewer = false`.
+
+[AutoResearchExam subset selection](examples/task-bank/autoresearchexam-carps/TASK.md) is a real benchmark task imported this way, with a grader in its own image and two hidden splits. See the [curve-fitting example](examples/curve-fitting/README.md), which has
+one script and three rewards, and the
+[threshold-deliverable example](examples/threshold-deliverable/README.md), which
+has a sealed split.
+
+#### A benchmark's time budget
+
+A benchmark task usually gives one agent a wall-clock budget and lets it submit
+many times. Two settings reproduce that:
+
+```python
+ari.bases.harbor_deliverable(..., memory=ari.Memory(conversation_mode="continue", conversations="all"))
+```
+
+```toml
+[limits]
+candidates = 41              # the baseline plus up to 40 submissions
+evaluations = 41
+
+[researcher]
+override_timeout_sec = 86400 # the benchmark's 24 hours, for the one session
+
+[reviewer]                   # its own table: a reviewer's timeout is at most 7200
+override_timeout_sec = 240
+```
+
+One researcher session then makes every proposal, so the run normally uses one
+researcher start; if the agent stops early, the next start is a fresh
+conversation. The session ends when its timeout, the candidate limit or the
+evaluation limit is reached, whichever comes first. The time a submission waits
+for review and grading counts against the session's timeout. Without the
+continuing memory, each proposal is a new session with the timeout to itself.
 
 ### Edit Harbor task files and keep the solver fixed
 
@@ -729,10 +919,12 @@ capability for a Harbor agent.
 
 ## Harbor evaluators
 
-The base tasks are built on two evaluators, which you can construct yourself
-when a base task does not fit. Each runs Harbor trials and reads the rewards of
-the Harbor task's own grader. Each evaluation uses one `solver_trial` start from
-the ledger you pass.
+The base tasks that start a solver are built on two evaluators, which you can
+construct yourself when a base task does not fit. Each runs Harbor trials and
+reads the rewards of the Harbor task's own grader. Each evaluation uses one
+`solver_trial` start from the ledger you pass. `harbor_deliverable` is built on
+`autoresearch_infrastructure.harbor_deliverable.HarborGraderEvaluator`, which
+starts no trial and takes no ledger.
 
 A single reward between 0 and 1 becomes the `SUCCESS_RATE` metric from
 `autoresearch_infrastructure.harbor_trial`. For other rewards, pass
@@ -955,7 +1147,7 @@ controller's selection, evidence and budgets are unchanged.
 ### Environment
 
 ```python
-ari.Task(..., environment=ari.Environment(harbor="researcher-env", workspace="reset"))
+ari.Task(..., environment=ari.Environment(harbor="researcher-env", workspace="reset", candidate_at="/app/output"))
 ```
 
 A start's container, its services and their volumes are deleted when the start
@@ -969,11 +1161,21 @@ ends. `workspace` says what survives besides the candidate and the memory:
 A changed export is refused before the next start. An export larger than the
 context limits is not kept, and its record says why.
 
+`candidate_at` names a second container path at which the researcher sees the
+candidate directory. It is the same directory as `/workspace/candidate/`, not a
+copy, and stays in step when ARI replaces the candidate's files between
+submissions. Use it for files written to run from a fixed place. It may not be
+a system directory or a path ARI mounts.
+
 `harbor` names a Harbor task directory. ARI uses only its `task.toml`
-`[environment]` table and its `environment/` directory: a Dockerfile, an
-optional `docker-compose.yaml` for services, or a prebuilt `docker_image`.
-Resources, network policy, environment variables and healthchecks are Harbor's
-own settings. The Harbor task's instruction, tests and solution are ignored.
+`[environment]` table, the network policy of its `[agent]` table, and its
+`environment/` directory: a Dockerfile, an optional `docker-compose.yaml` for
+services, or a prebuilt `docker_image`. Resources, network policy, environment
+variables and healthchecks are Harbor's own settings. Harbor applies the
+`[agent]` network policy only while the agent runs, and `[environment]`'s
+during setup, as it does for a task under `harbor run`; an allowlist is
+enforced by Harbor's egress-control sidecar. The Harbor task's instruction,
+tests and solution are ignored.
 
 ARI adds only what the experiment needs: the working directory, the skills
 directory, its isolation overlay and the mounts for the candidate, context,
@@ -1111,6 +1313,12 @@ runs a researcher in a Harbor environment with a sidecar, carried memory and
 retained files, extends the run by one more start, builds and records an image,
 and runs a reviewer in its own environment. It pulls a small pinned image. To run them, build `tests/fixtures/harbor-review/Dockerfile`,
 then set `COEVOLUTION_DOCKER_TESTS=1` and `ARI_REVIEW_FIXTURE_IMAGE=sha256:...`.
+
+`tests/test_harbor_deliverable.py` grades the threshold-deliverable example in
+real grader containers, with a grader built from its own directory, and builds
+the derived agent environment to confirm the grader's files are absent from it.
+It needs only `COEVOLUTION_DOCKER_TESTS=1` and pulls a small pinned image. It
+does not start an agent in that environment.
 
 `npm run test:viewer -- PATH_TO_PACKING_HTML` and
 `npm run test:progress -- PATH_TO_HTML` drive the viewer in Chromium. They need

@@ -777,6 +777,26 @@ def _candidate_artifact_images(output, records, candidate_root, candidate_hash, 
                     warnings.append(f"Artifact previews unavailable: {exc}")
 
 
+def _mark_sealed(output: Path, records: list[dict]) -> None:
+    """Note which attempts have a sealed record in private evidence. The record is never opened.
+
+    A Harbor deliverable task's sealed score is private: the page says only
+    that one exists, so a reader knows to ask ``ari sealed`` for it.
+    """
+    from autoresearch_infrastructure.api import _private_artifacts_path
+    from autoresearch_infrastructure.harbor_deliverable import SEALED_RECORD
+
+    for record in records:
+        for cell in record.get("cells", []):
+            for attempt in cell.get("trial_starts", []):
+                try:
+                    private = _private_artifacts_path(_safe_child(output, attempt["result_path"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if (private / SEALED_RECORD).is_file():
+                    attempt["sealed_recorded"] = True
+
+
 def _evidence_records(
     output: Path,
     evidence: dict,
@@ -1048,6 +1068,7 @@ def build_index(output: Path, *, partial_evidence: Path | None = None) -> dict:
                 _candidate_artifact_images(
                     output, records, candidate_root, candidate.get("source_hash"), warnings, image_bytes,
                 )
+            _mark_sealed(output, records)
             parent_id = candidate.get("parent_id") or "seed"
             comparisons = [
                 {
@@ -1090,6 +1111,7 @@ def build_index(output: Path, *, partial_evidence: Path | None = None) -> dict:
                     "reasons": candidate.get("reasons", []),
                     "structural_errors": candidate.get("structural_errors", []),
                     "diff_patch": _candidate_diff(candidate_root / "diff.patch", warnings),
+                    "file_count": None if candidate_payload is None else len(candidate_payload),
                     "comparisons": comparisons,
                     "evidence": records,
                 }

@@ -144,7 +144,7 @@ def test_compact_feedback_preserves_measured_aggregate_and_selection():
 
 
 def test_compact_feedback_keeps_whether_the_session_may_submit_again():
-    following = {"parent_id": "candidate-0002", "remaining": 2, "note": "Edit it and submit again."}
+    following = {"parent_id": "candidate-0002", "remaining_in_this_session": 2, "note": "Edit it and submit again."}
     kept = mcp_proxy._feedback({"candidate_id": "candidate-0003", "evidence": {}, "next": following})
     assert kept["next"] == following
     stopped = mcp_proxy._feedback({"candidate_id": "candidate-0004", "evidence": {}, "next": None,
