@@ -68,6 +68,7 @@ def harbor_deliverable(
     feedback_artifacts: bool = False,
     cases: tuple[str, ...] | list[str] = ("default",),
     check_seed: bool = True,
+    timeout: float | None = None,
 ) -> Task:
     """Improve the deliverable of a Harbor task, scored by that task's own grader.
 
@@ -136,6 +137,14 @@ def harbor_deliverable(
     ``[task]`` in the run settings; the grader still uses the task's image.
     ``task_environment=False`` runs them in the ``--image`` container instead.
 
+    A task whose ``[environment]`` asks for more CPUs than this machine has is
+    refused when it opens, since a grader with time limits would score
+    differently. ``grader_cpus = N`` under ``[task]`` in the run settings
+    grades with ``N`` instead, and is recorded with the run.
+
+    ``timeout`` is the seconds each grader script may run. The default is the
+    task's ``[verifier] timeout_sec``.
+
     ``cases`` names the fixed inputs every candidate is graded on. Each one is
     a separate run of the scripts, which read the case name from the
     environment variable ``ARI_CASE``.
@@ -162,6 +171,7 @@ def harbor_deliverable(
         rewards=rewards, capabilities=capabilities, network=network, feedback_log=feedback_log,
         feedback_artifacts=feedback_artifacts, seed=run.directory / seed if check_seed else None,
         task_image=run.settings.task.get("image"), grader_image=run.settings.task.get("grader_image"),
+        timeout=timeout, cpus=run.settings.task.get("grader_cpus"),
     )
     elsewhere = deliverable.rstrip("/") != _CANDIDATE
     harbor = None

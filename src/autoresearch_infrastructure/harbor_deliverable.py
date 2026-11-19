@@ -127,14 +127,20 @@ class HarborGraderEvaluator:
         An image pinned by digest that was built from the ``grader``
         directory, to use instead of building it. ``grader`` must then name
         that directory, so that it is still known to be the grader's.
+    ``timeout``
+        Seconds each script may run, in place of the task's ``[verifier]
+        timeout_sec``. A benchmark whose own grading service has its own limit
+        needs this: that ``[verifier]`` table may belong to a different step.
     ``task_image``
         An image pinned by digest to read the shipped deliverable from, instead
         of the task's main image: the task's image with what an agent needs
         added, as the run settings name it under ``[task] image``.
 
     The grader container gets the CPUs and memory of the task's
-    ``[environment]``. CPUs are capped at the host's count, and each
-    evaluation records the number used.
+    ``[environment]``. A task that asks for more CPUs than this machine has is
+    refused, because a grader with time limits scores differently on fewer.
+    ``cpus`` grades with that many instead, and each evaluation records the
+    number used.
 
     Every evaluation gets a new grader container, which is deleted with
     everything it wrote when the script ends. It has no capabilities beyond
@@ -149,7 +155,8 @@ class HarborGraderEvaluator:
                  grader: str | None = None, state: Path, rewards: dict[Metric, str] | None = None,
                  capabilities=(), network: bool = False, feedback_log: bool = False,
                  feedback_artifacts: bool = False, seed: Path | None = None,
-                 task_image: str | None = None, grader_image: str | None = None):
+                 task_image: str | None = None, grader_image: str | None = None,
+                 timeout: float | None = None, cpus: float | None = None):
         self.task = Path(task).resolve()
         manifest = self.task / "task.toml"
         if not manifest.is_file():
@@ -181,14 +188,24 @@ class HarborGraderEvaluator:
         if task_image is not None and not _PINNED.fullmatch(str(task_image)):
             raise ValueError("task_image must be an image ID or digest (sha256:...)")
         self.task_image = task_image
-        requested = self.environment.get("cpus", 1)
-        self.cpus = min(float(requested), float(os.cpu_count() or 1))
-        self.timeout = verifier.get("timeout_sec", 600)
+        requested, host = float(self.environment.get("cpus", 1)), float(os.cpu_count() or 1)
+        if cpus is None:
+            if requested > host:
+                raise ValueError(
+                    f"The task's grader asks for {requested:g} CPUs and this machine has {host:g}. A grader with "
+                    "time limits scores differently on fewer CPUs, so grade on a larger machine, or accept "
+                    f"fewer by writing grader_cpus = {host:g} under [task] in the run settings")
+            cpus = requested
+        if type(cpus) not in (int, float) or not 0 < cpus <= host:
+            raise ValueError(f"grader_cpus must be positive and at most this machine's {host:g} CPUs")
+        self.cpus = float(cpus)
+        self.timeout = verifier.get("timeout_sec", 600) if timeout is None else timeout
         self.env = {**verifier.get("env", {})}
         if any(not isinstance(value, str) or "${" in value for value in self.env.values()):
             raise ValueError("[verifier.env] values must be literal text: a grader gets no host variables")
         if type(self.timeout) not in (int, float) or not 0 < self.timeout <= 86400:
-            raise ValueError("[verifier] timeout_sec must be positive and at most 86400 seconds")
+            raise ValueError("The grading timeout, timeout or [verifier] timeout_sec, must be positive and "
+                             "at most 86400 seconds")
         self.capabilities = tuple(capabilities)
         if any(not isinstance(name, str) or not re.fullmatch(r"[A-Z_]+", name) for name in self.capabilities):
             raise ValueError("capabilities are Linux capability names, such as SYS_ADMIN")

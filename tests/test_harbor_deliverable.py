@@ -605,10 +605,14 @@ def test_the_seed_is_read_from_the_agent_ready_image_when_the_settings_name_one(
         evaluator(tmp_path / "tagged", task_image="python:3.13")
 
 
-def test_the_grader_is_given_no_more_cpus_than_the_host_has(tmp_path, monkeypatch):
+def test_a_grader_needing_more_cpus_than_the_host_is_refused_unless_fewer_are_accepted(tmp_path, monkeypatch):
     monkeypatch.setattr(harbor_deliverable.os, "cpu_count", lambda: 4)
     task = harbor_task(tmp_path / "harbor-task", **{"task.toml": '[environment]\ncpus = 8\n'})
-    assert evaluator(tmp_path, task=task).cpus == 4
+    with pytest.raises(ValueError, match="asks for 8 CPUs and this machine has 4.*grader_cpus = 4"):
+        evaluator(tmp_path, task=task)
+    assert evaluator(tmp_path / "accepted", task=task, cpus=4).cpus == 4
+    with pytest.raises(ValueError, match="at most this machine's 4 CPUs"):
+        evaluator(tmp_path / "more", task=task, cpus=6)
     small = harbor_task(tmp_path / "small", **{"task.toml": '[environment]\ncpus = 2\n'})
     assert evaluator(tmp_path / "s", task=small).cpus == 2
 
@@ -765,4 +769,23 @@ def test_the_agent_allowlist_is_enforced_while_the_agent_runs_and_not_during_set
     assert result.exception_info is None, result.exception_info
     assert (workspace / "setup.txt").read_text().split() == ["web", "open", "other", "open"]
     assert (workspace / "run.txt").read_text().split() == ["web", "open", "other", "closed"]
+    assert subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True).stdout == before
+
+
+def test_the_grading_timeout_defaults_to_the_verifiers_and_can_be_set(tmp_path):
+    assert evaluator(tmp_path).timeout == 30  # the fixture's [verifier] timeout_sec
+    assert evaluator(tmp_path / "set", timeout=2700).timeout == 2700
+    for bad in (0, -1, 86401, "600"):
+        with pytest.raises(ValueError, match="grading timeout"):
+            evaluator(tmp_path / f"bad{bad}", timeout=bad)
+
+
+@docker
+def test_a_script_past_its_timeout_leaves_the_evaluation_unfinished_and_no_container(tmp_path):
+    task = harbor_task(tmp_path / "harbor-task", **{"tests/feedback.sh": "sleep 30\n"})
+    grader = evaluator(tmp_path, task=task, sealed=None, timeout=2)
+    (tmp_path / "candidate").mkdir()
+    before = subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True).stdout
+    with pytest.raises(RuntimeError, match="ran past 2 seconds"):
+        grader.grade(tmp_path / "candidate", "feedback", tmp_path / "evidence")
     assert subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True).stdout == before
