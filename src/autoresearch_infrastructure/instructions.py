@@ -17,6 +17,28 @@ from .api import Metric, Objective
 
 _LAYOUT = Template(Path(__file__).with_name("instructions-layout.md").read_text())
 _SECTIONS = ("objective", "rules", "environment")
+_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
+# Names given to unnamed items: the reviewer's criteria have always been rule_1, rule_2 and so on.
+DEFAULT_PREFIX = {"rules": "rule_", "environment": "note_"}
+
+
+def default_names(kind: str, count: int) -> tuple[str, ...]:
+    return tuple(f"{DEFAULT_PREFIX[kind]}{number}" for number in range(1, count + 1))
+
+
+def check_names(kind: str, names, count: int) -> tuple[str, ...]:
+    """Names for ``count`` items of ``kind``: given ones checked, or the defaults when there are none."""
+    names = tuple(names)
+    if not names:
+        return default_names(kind, count)
+    if len(names) != count:
+        raise ValueError(f"Give a name for every one of the {count} {kind} entries, or none")
+    for name in names:
+        if not isinstance(name, str) or not _NAME.fullmatch(name):
+            raise ValueError(f"{name!r} is not a usable name: use lowercase letters, digits and underscores")
+    if len(set(names)) != len(names):
+        raise ValueError(f"The {kind} names repeat: {sorted(n for n in names if names.count(n) > 1)}")
+    return names
 
 
 @dataclass(frozen=True)
@@ -31,12 +53,18 @@ class Instructions:
         What the sandbox enforces or provides whatever the researcher does.
     ``title``
         An optional one-line name for the task.
+    ``rule_names``, ``environment_names``
+        Optional stable names, one for each rule or environment note, used by
+        the reviewer's checks and by transforms. Without them the names are
+        ``rule_1``, ``rule_2``, … and ``note_1``, ``note_2``, ….
     """
 
     objective: str
     rules: tuple[str, ...] = ()
     environment: tuple[str, ...] = ()
     title: str = ""
+    rule_names: tuple[str, ...] = ()
+    environment_names: tuple[str, ...] = ()
 
     def __post_init__(self):
         if not isinstance(self.objective, str) or not self.objective.strip():
@@ -46,6 +74,10 @@ class Instructions:
             if any(not isinstance(item, str) or not item.strip() for item in items):
                 raise ValueError(f"Each entry under {name} must be nonempty text")
             object.__setattr__(self, name, tuple(item.strip() for item in items))
+        check_names("rules", self.rule_names, len(self.rules))
+        check_names("environment", self.environment_names, len(self.environment))
+        object.__setattr__(self, "rule_names", tuple(self.rule_names))
+        object.__setattr__(self, "environment_names", tuple(self.environment_names))
 
     @classmethod
     def parse(cls, text: str) -> Instructions:

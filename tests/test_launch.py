@@ -92,7 +92,7 @@ def test_check_freezes_the_plan_and_starts_nothing(example):
     assert summary["starts"] == {"researcher": 0}
     assert summary["review"] == "the task's validity function"
     plan = json.loads((example.output / "plan.json").read_text())
-    assert plan["settings"]["researcher"]["override_timeout_sec"] == 600
+    assert plan["settings"]["researcher"]["override_timeout_sec"] is None  # the task's limit, else 600
     assert "Move value.json toward ten." in plan["instructions"]
     assert "- Starting files: `value.json`." in plan["instructions"]
     assert "- Score: `error`. Lower is better." in plan["instructions"]

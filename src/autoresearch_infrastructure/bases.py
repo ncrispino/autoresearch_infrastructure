@@ -69,6 +69,7 @@ def harbor_deliverable(
     cases: tuple[str, ...] | list[str] = ("default",),
     check_seed: bool = True,
     timeout: float | None = None,
+    split: Path | str | None = None,
 ) -> Task:
     """Improve the deliverable of a Harbor task, scored by that task's own grader.
 
@@ -142,6 +143,18 @@ def harbor_deliverable(
     differently. ``cpus = N`` under ``[task]`` in the run settings gives the
     grader and the agents ``N`` instead, and is recorded with the run.
 
+    ``split`` names a split file beside the task file that divides
+    ``instruction.md`` into the objective, named rules and named environment
+    notes, keeping its wording and recording each change; see
+    ``autoresearch_infrastructure.instruction_split``. Without one,
+    ``instruction.md`` is the objective word for word and ``rules`` and
+    ``environment`` are added to it. ARI's own environment notes are named
+    ``ari_*`` either way.
+
+    The researcher's time limit defaults to the task's own ``[agent]
+    timeout_sec``; ``override_timeout_sec`` in ``[researcher]`` overrides it.
+    The instructions state the limit in force and the number of proposals.
+
     ``timeout`` is the seconds each grader script may run. The default is the
     task's ``[verifier] timeout_sec``.
 
@@ -181,28 +194,31 @@ def harbor_deliverable(
                                                      image=run.settings.task.get("image"),
                                                      allowed_hosts=run.settings.task.get("allowed_hosts", ()),
                                                      cpus=run.settings.task.get("cpus"))
-    if instructions is None:
-        source = task / "instruction.md"
+    limit = _task_time_limit(task)
+    notes = _ari_notes(run, deliverable, elsewhere, harbor, limit)
+    source = task / "instruction.md"
+    mapping = None
+    if split is not None:
+        if instructions is not None or rules or environment:
+            raise ValueError("A split gives the objective, rules and environment; pass none of them as well")
+        from . import instruction_split
+
+        given, mapping = instruction_split.load(run.directory / split, source)
+        clash = set(given.environment_names) & set(notes)
+        if clash:
+            raise ValueError(f"The split's environment names {sorted(clash)} are ARI's own; use others")
+        instructions = Instructions(
+            objective=given.objective, rules=given.rules, title=given.title, rule_names=given.rule_names,
+            environment=given.environment + tuple(notes.values()),
+            environment_names=given.environment_names + tuple(notes),
+        )
+    elif instructions is None:
         if not source.is_file() or not source.read_text(encoding="utf-8").strip():
             raise ValueError(f"No instruction at {source}. Write it, or pass instructions=")
         instructions = Instructions(
             objective=source.read_text(encoding="utf-8").strip(),
             rules=tuple(rules),
-            environment=(
-                *((f"`{deliverable}`, the deliverable directory the text above names, is also mounted at "
-                   "`/workspace/candidate/`. The two paths are one directory, not two copies. Its contents "
-                   f"are what is graded, and the grader reads them at `{deliverable}`.",)
-                  if elsewhere else ()),
-                "Submitting is described under the file layout below. It replaces any submission tool, "
-                "time limit or submission count the text above names.",
-                "The grader runs in a separate container that you cannot reach. Its score is returned to you "
-                "after each submission.",
-                *(_network_note(harbor) if harbor is not None else ()),
-                *(("You work in the task's main container, so its other paths are as the text above says. "
-                   + (f"Only `{deliverable}`, `/workspace` and `/tmp` are writable." if elsewhere
-                      else "Only `/workspace` and `/tmp` are writable."),) if harbor is not None else ()),
-                *environment,
-            ),
+            environment=(*notes.values(), *environment),
         )
     elif rules or environment:
         raise ValueError("Pass either instructions, or rules and environment to add to instruction.md")
@@ -217,7 +233,59 @@ def harbor_deliverable(
                                 candidate_at=deliverable if elsewhere else None),
         review_environment=harbor if run.settings.reviewer is not None else None,
         memory=memory or Memory(),
+        researcher_timeout=limit,
+        instruction_split=mapping,
     )
+
+
+def _task_time_limit(task: Path) -> float | None:
+    """The task's own limit for its agent, ``[agent] timeout_sec``, within what a researcher may have."""
+    import tomllib
+
+    from .harbor_filesystem import RESEARCHER_MAX_TIMEOUT
+
+    manifest = task / "task.toml"
+    limit = (tomllib.loads(manifest.read_text(encoding="utf-8")).get("agent") or {}).get("timeout_sec") \
+        if manifest.is_file() else None
+    if limit is None:
+        return None
+    if type(limit) not in (int, float) or limit <= 0:
+        raise ValueError("The task's [agent] timeout_sec must be a positive number of seconds")
+    return float(min(limit, RESEARCHER_MAX_TIMEOUT))
+
+
+def _ari_notes(run: Run, deliverable: str, elsewhere: bool, harbor: Path | None, limit: float | None) -> dict:
+    """The environment notes ARI adds, by name, so a transform can omit or reword any of them."""
+    notes = {}
+    if elsewhere:
+        notes["ari_deliverable"] = (
+            f"`{deliverable}`, the deliverable directory the text above names, is also mounted at "
+            "`/workspace/candidate/`. The two paths are one directory, not two copies. Its contents are what "
+            f"is graded, and the grader reads them at `{deliverable}`.")
+    notes["ari_submission"] = ("Submitting is described under the file layout below. It replaces any submission "
+                               "tool, time limit or submission count the text above names.")
+    notes["ari_grader"] = ("The grader runs in a separate container that you cannot reach. Its score is returned "
+                           "to you after each submission.")
+    if harbor is not None:
+        notes.update(dict(zip(("ari_network",), _network_note(harbor))))
+        notes["ari_container"] = (
+            "You work in the task's main container, so its other paths are as the text above says. "
+            + (f"Only `{deliverable}`, `/workspace` and `/tmp` are writable." if elsewhere
+               else "Only `/workspace` and `/tmp` are writable."))
+    if run.settings.researcher is not None:
+        seconds = run.settings.researcher.get("override_timeout_sec") or limit or 600
+        notes["ari_budget"] = (f"This session may run for up to {_duration(seconds)}, and the run allows up to "
+                               f"{run.settings.limits.max_candidates - 1} proposals in all.")
+    return notes
+
+
+def _duration(seconds: float) -> str:
+    if seconds % 3600 == 0:
+        hours = int(seconds // 3600)
+        return f"{hours} hour" + ("s" if hours != 1 else "")
+    if seconds % 60 == 0:
+        return f"{int(seconds // 60)} minutes"
+    return f"{seconds:g} seconds"
 
 
 _CANDIDATE = "/workspace/candidate"

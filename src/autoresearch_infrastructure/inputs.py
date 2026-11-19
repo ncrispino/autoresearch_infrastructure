@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .instructions import Instructions
+from .instructions import Instructions, check_names
 
 _HISTORY = ("all", "none")
 _CONVERSATION_MODES = ("files", "continue")
@@ -167,6 +167,18 @@ class ResearcherInputs:
     environment: Environment = field(default_factory=Environment)
     memory: Memory = field(default_factory=Memory)
     title: str = ""
+    rule_names: tuple[str, ...] = ()
+    environment_names: tuple[str, ...] = ()
+
+    @property
+    def named_rules(self) -> dict[str, str]:
+        """Each rule by its stable name: the reviewer judges one check for each."""
+        return dict(zip(check_names("rules", self.rule_names, len(self.rules)), self.rules))
+
+    @property
+    def named_environment(self) -> dict[str, str]:
+        return dict(zip(check_names("environment", self.environment_names, len(self.environment_notes)),
+                        self.environment_notes))
 
     @classmethod
     def resolve(cls, instructions: Instructions, measured, *, environment=None, memory=None) -> ResearcherInputs:
@@ -179,6 +191,8 @@ class ResearcherInputs:
             environment=environment or Environment(),
             memory=memory or Memory(),
             title=instructions.title,
+            rule_names=instructions.rule_names,
+            environment_names=instructions.environment_names,
         )
 
     def specification(self) -> str:
