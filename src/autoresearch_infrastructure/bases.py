@@ -196,7 +196,8 @@ def harbor_deliverable(
                                                      allowed_hosts=run.settings.task.get("allowed_hosts", ()),
                                                      cpus=run.settings.task.get("cpus"))
     limit = _task_time_limit(task)
-    notes = _ari_notes(run, deliverable, elsewhere, harbor, limit)
+    notes = _ari_notes(run, deliverable, elsewhere, harbor, limit, split=split is not None,
+                       panel=len(tuple(cases)) * run.settings.repeats)
     source = task / "instruction.md"
     mapping = None
     if split is not None:
@@ -216,10 +217,13 @@ def harbor_deliverable(
     elif instructions is None:
         if not source.is_file() or not source.read_text(encoding="utf-8").strip():
             raise ValueError(f"No instruction at {source}. Write it, or pass instructions=")
+        # The task's own notes first and ARI's after them, by name, as with a split; the budget note is last.
+        environment = tuple(environment)
         instructions = Instructions(
             objective=source.read_text(encoding="utf-8").strip(),
             rules=tuple(rules),
-            environment=(*notes.values(), *environment),
+            environment=(*environment, *notes.values()),
+            environment_names=(*(f"note_{number}" for number in range(1, len(environment) + 1)), *notes),
         )
     elif rules or environment:
         raise ValueError("Pass either instructions, or rules and environment to add to instruction.md")
@@ -255,11 +259,26 @@ def _task_time_limit(task: Path) -> float | None:
     return float(min(limit, RESEARCHER_MAX_TIMEOUT))
 
 
-def _ari_notes(run: Run, deliverable: str, elsewhere: bool, harbor: Path | None, limit: float | None) -> dict:
-    """The environment notes ARI adds, by name, so a transform can omit or reword any of them."""
+def _ari_notes(run: Run, deliverable: str, elsewhere: bool, harbor: Path | None, limit: float | None, *,
+               split: bool = False, panel: int = 1) -> dict:
+    """The environment notes ARI adds, by name, so a transform can omit or reword any of them.
+
+    ``split`` says the task's text was adapted with a split, which drops what
+    ARI replaces, so the submission note need not override it. ``panel`` is
+    the number of evaluations one candidate uses.
+    """
     notes = {}
-    notes["ari_submission"] = ("Submitting is described under the file layout below. It replaces any submission "
-                               "tool, time limit or submission count the text above names.")
+    researcher = run.settings.researcher is not None
+    submission = "Submit each candidate with the `record_candidate` tool, described below."
+    if researcher:
+        submission += " The time and the number of proposals this run allows are given in the last note."
+    if not split:
+        # The task's text is shown as written, so it may name a submission loop of its own. Override that
+        # loop only: a limit the grader applies to the deliverable, such as a per-call time budget, still holds.
+        submission += (" If the text above names its own submission tool, a time limit for your whole session "
+                       "or a number of submissions, these replace them. A limit that grading applies to the "
+                       "deliverable itself still holds.")
+    notes["ari_submission"] = submission
     notes["ari_grader"] = ("The grader runs in a separate container that you cannot reach. Its score is returned "
                            "to you after each submission.")
     if harbor is not None:
@@ -268,10 +287,15 @@ def _ari_notes(run: Run, deliverable: str, elsewhere: bool, harbor: Path | None,
             "You work in the task's main container, so its other paths are as the text above says. "
             + (f"Only `{deliverable}`, `/workspace` and `/tmp` are writable." if elsewhere
                else "Only `/workspace` and `/tmp` are writable."))
-    if run.settings.researcher is not None:
+    if researcher:
         seconds = run.settings.researcher.get("override_timeout_sec") or limit or 600
-        notes["ari_budget"] = (f"This session may run for up to {_duration(seconds)}, and the run allows up to "
-                               f"{run.settings.limits.max_candidates - 1} proposals in all.")
+        limits = run.settings.limits
+        # The baseline takes one candidate and one panel of evaluations; a proposal needs both.
+        proposals = max(0, min(limits.max_candidates - 1, limits.max_evaluations // max(panel, 1) - 1))
+        notes["ari_budget"] = (
+            f"You have up to {_duration(seconds)} in this session. A session started after this one ends gets "
+            f"the same time again. Across the whole run, up to {proposals} proposal"
+            f"{'' if proposals == 1 else 's'} can be submitted and scored.")
     return notes
 
 

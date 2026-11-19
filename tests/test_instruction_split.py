@@ -158,7 +158,13 @@ def test_a_deliverable_task_with_a_split_records_it_and_takes_the_tasks_time_lim
     assert plan["inputs"]["instruction_split"]["parts"][1]["tag"] == "verbatim"
     assert plan["inputs"]["researcher_timeout"] == 7200.0
     assert run.inputs.named_environment["ari_budget"] == (
-        "This session may run for up to 2 hours, and the run allows up to 3 proposals in all.")
+        "You have up to 2 hours in this session. A session started after this one ends gets the same time "
+        "again. Across the whole run, up to 3 proposals can be submitted and scored.")
+    # A split drops what ARI replaces, so the submission note overrides nothing.
+    assert run.inputs.named_environment["ari_submission"] == (
+        "Submit each candidate with the `record_candidate` tool, described below. The time and the number of "
+        "proposals this run allows are given in the last note.")
+    assert list(run.inputs.named_environment)[-1] == "ari_budget"
     assert "examples" in run.inputs.named_environment and "ari_submission" in run.inputs.named_environment
     assert "24 hours" not in plan["instructions"]  # dropped, and the settings' budget stated instead
     assert Path(tmp_path / "task/split.toml").is_file()
@@ -195,3 +201,22 @@ def test_ari_instructions_reads_a_task_or_a_run(tmp_path, capsys):
     assert capsys.readouterr().out == from_task
     assert main(["instructions", str(tmp_path / "run"), "--rendered"]) == 0
     assert "Do not let `select` run past `budget`." in capsys.readouterr().out
+
+
+def test_without_a_split_the_submission_note_overrides_only_the_session_and_the_budget_counts_evaluations(
+        tmp_path):
+    pytest.importorskip("harbor")
+    from autoresearch_infrastructure import launch
+
+    deliverable_task(tmp_path)
+    task = tmp_path / "task"
+    (task / "task.py").write_text((task / "task.py").read_text().replace(", split='split.toml'", ""))
+    settings = task / "settings.toml"
+    settings.write_text(settings.read_text().replace("candidates = 4\n", "candidates = 4\nevaluations = 3\n"))
+    run = launch.open_run(task, settings, tmp_path / "run", "sha256:" + "a" * 64)
+    notes = run.inputs.named_environment
+    assert notes["ari_submission"].endswith(
+        "If the text above names its own submission tool, a time limit for your whole session or a number of "
+        "submissions, these replace them. A limit that grading applies to the deliverable itself still holds.")
+    # Three evaluations: the baseline's and two more, though the candidate limit would allow three proposals.
+    assert notes["ari_budget"].endswith("up to 2 proposals can be submitted and scored.")
