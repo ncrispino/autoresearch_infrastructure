@@ -99,7 +99,10 @@ fails. A rule only the reviewer can judge says so.
 | 26 | objective | verbatim |  | - If a call is killed, raises, or returns anything other than exactly … | (the source, unchanged) |  |  |
 | 27 | rule | added | `no_lookup` | (none) | Do not store subsets, indices or results chosen for particular clouds, or return them in place of a subset computed from the points `select` is given. | The importer's: the task states no rule against stored answers, and only a reviewer can judge it. | Nothing besides the reviewer: graded clouds are sealed, so a stored answer for them cannot exist, but one for the example clouds could. |
 
-Long sources are cut short in this table; the TOML has them in full.
+Long sources are cut short in this table; the TOML has them in full. To see the
+same mapping as a diff, with every source in full, run
+`ari instructions examples/task-bank/autoresearchexam-carps`; add `--changes` to
+leave out the verbatim parts, or `--rendered` to print the whole prompt text.
 
 ARI adds its own environment notes after the task's, also by name, so a study can
 omit or reword any of them like the task's own: `ari_submission`, `ari_grader`,

@@ -209,3 +209,38 @@ def _check_coverage(parts: list[Part], source: str, instruction: Path) -> dict:
 def _preview(text: str) -> str:
     text = " ".join(text.split())
     return repr(text[:70] + ("…" if len(text) > 70 else ""))
+
+
+def describe(record: dict, *, changes_only: bool = False) -> str:
+    """The recorded split as a diff, one hunk per part, in the order the split lists them.
+
+    ``-`` lines are the source's words, ``+`` lines the words the researcher
+    sees instead, ``#`` lines the reason and what else enforces a rule.
+    A verbatim part is shown as unchanged context, or left out with ``changes_only``.
+    """
+    hunks = []
+    counts = {"verbatim": 0, "adapted": 0, "added": 0, "dropped": 0}
+    for part in record["parts"]:
+        tag = part.get("tag", "dropped")
+        counts[tag] += 1
+        if changes_only and tag == "verbatim":
+            continue
+        heading = "@@ " + part["to"] + (f" {part['name']}" if part.get("name") else "")
+        heading += f" ({tag})" if part["to"] != "dropped" else ""
+        lines = [heading]
+        if tag in ("verbatim", "adapted", "dropped"):
+            lines += _prefixed(part["source"], "  " if tag == "verbatim" else "- ")
+        if tag in ("adapted", "added"):
+            lines += _prefixed(part["text"], "+ ")
+        if part.get("reason"):
+            lines.append("  # " + part["reason"])
+        if part.get("enforced"):
+            lines.append("  # enforced: " + part["enforced"])
+        hunks.append("\n".join(lines))
+    summary = (f"{record['split']}: {len(record['parts'])} parts: {counts['verbatim']} verbatim, "
+               f"{counts['adapted']} adapted, {counts['added']} added, {counts['dropped']} dropped")
+    return summary + "\n\n" + "\n\n".join(hunks) + "\n"
+
+
+def _prefixed(text: str, prefix: str) -> list[str]:
+    return [(prefix + line).rstrip() for line in text.strip("\n").splitlines()]

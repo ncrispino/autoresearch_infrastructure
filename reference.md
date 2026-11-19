@@ -136,6 +136,7 @@ with agents, and [local.toml](examples/curve-fitting/local.toml) is one without.
 | `ari view DIR --html FILE` | Writes the results as one HTML page. `FILE` must not exist yet. |
 | `ari inspect DIR` | Prints the results as JSON. |
 | `ari sealed DIR` | Prints the held-out rewards that a [Harbor deliverable task](#improve-a-harbor-tasks-deliverable) recorded privately. |
+| `ari instructions TASK_OR_RUN [--changes] [--rendered]` | Shows how a task's `instruction.md` became the researcher's instructions: one hunk per part of its split, with the source's words as `-` lines, the words used instead as `+` lines, and the reason. `--changes` leaves out the verbatim parts; `--rendered` prints the instructions as the researcher sees them, after any transforms. Given a run directory, it reads what that run's plan recorded. Starts nothing. |
 
 `TASK` is a directory containing `task.py`, or the file itself. `DIR` is the run
 directory. The commands that open a task also take:
@@ -865,7 +866,16 @@ ARI's own environment notes follow the task's, by name: `ari_submission`,
 A split may not use those names. Without a split the rules are named `rule_1`,
 `rule_2`, … and the notes `note_1`, `note_2`, …. The reviewer's checks use the
 same names. [The carps example](examples/task-bank/autoresearchexam-carps/TASK.md#how-instructionmd-is-split)
-shows a full split, part by part.
+shows a full split, part by part. `ari instructions TASK --changes` prints
+the same mapping as a diff:
+
+```
+@@ rule time_budget (adapted)
+- `select` must return within it.
++ Do not let `select` run past `time_budget_s`.
+  # Made a prohibition, so the empty starter passes review.
+  # enforced: The grader kills a call `time_budget_s + 5` seconds after it starts …
+```
 
 #### A benchmark's time budget
 

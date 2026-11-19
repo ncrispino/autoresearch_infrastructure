@@ -48,7 +48,19 @@ def main(argv=None):
     command.add_argument("--deliverable", required=True, help="The container path of the deliverable, such as /app/output")
     command.add_argument("--output", type=Path, required=True, help="A new directory to write the files into")
     command.add_argument("--image", help="An image ID to read instead of building the task's image")
+    summary = ("Show how a task's instruction.md became the researcher's instructions, part by part, from its "
+               "split. Starts nothing.")
+    command = commands.add_parser("instructions", help=summary, description=summary)
+    command.add_argument("task", type=Path,
+                         help="A task file, a directory containing task.py, or a run directory to read the plan of")
+    command.add_argument("--config", type=Path, help="Run settings; default is run.toml beside the task")
+    command.add_argument("--image", help="Immutable image ID for the researcher and reviewer")
+    command.add_argument("--changes", action="store_true", help="Leave out the parts kept verbatim")
+    command.add_argument("--rendered", action="store_true",
+                         help="Print the instructions as the researcher sees them, after any transforms")
     args = parser.parse_args(argv)
+    if args.command == "instructions":
+        return _instructions(args)
     if args.command == "extract-seed":
         from .harbor_deliverable import extract_seed
 
@@ -74,6 +86,39 @@ def main(argv=None):
         print(json.dumps(write_html_preview(output, args.html, partial_evidence=args.partial_evidence)))
     else:
         print(json.dumps(build_index(output, partial_evidence=args.partial_evidence), indent=2))
+    return 0
+
+
+def _instructions(args) -> int:
+    import tempfile
+
+    from . import instruction_split, launch
+
+    try:
+        if (args.task / "plan.json").is_file():  # a run: what it recorded
+            plan = json.loads((args.task / "plan.json").read_text())
+        else:  # a task: open it as `ari check` does, in a directory that is then deleted
+            directory = args.task if args.task.is_dir() else args.task.parent
+            config = args.config or (directory / "run.toml" if (directory / "run.toml").is_file() else None)
+            with tempfile.TemporaryDirectory(prefix="ari-instructions-") as scratch:
+                with contextlib.redirect_stdout(sys.stderr):
+                    run = launch.open_run(args.task, config, Path(scratch) / "run", args.image)
+                    run.research.close()
+                plan = json.loads((Path(scratch) / "run/plan.json").read_text())
+    except (ValueError, RuntimeError, OSError) as error:
+        print(f"ari instructions: {type(error).__name__}: {error}", file=sys.stderr)
+        return 2
+    if args.rendered:
+        print(plan["instructions"])
+        return 0
+    record = plan["inputs"].get("instruction_split")
+    if record is None:
+        print("This task has no split: instruction.md is the objective as written. "
+              "--rendered prints the instructions in full.")
+        return 0
+    print(instruction_split.describe(record, changes_only=args.changes), end="")
+    if plan["inputs"].get("transforms"):
+        print(f"\n{len(plan['inputs']['transforms'])} transform(s) then change these; --rendered shows the result.")
     return 0
 
 
