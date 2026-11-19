@@ -42,7 +42,7 @@ is "no submission".
 | `environment/are-grader-ctx/Dockerfile` | `grader="environment/are-grader-ctx"` | The grader's own image, with both hidden splits in its `/tests`. ARI builds it once and leaves the directory out of the agents' container. |
 | `/tests/intermediate.sh` in that image | `feedback` | Scores the `intermediate` split. The researcher sees this score. |
 | `/tests/test.sh` in that image | `sealed` | Scores the `final` split. Recorded privately. |
-| The grader runs each call as uid 1001 with `runuser` | `capabilities=["CHOWN", "SETUID", "SETGID"]` | ARI's grader container has no capabilities otherwise. |
+| The grader runs each call as uid 1001 with `runuser` | Docker's default root capabilities without the network ones | ARI's grader container has no capabilities otherwise. |
 | `cap_add: SYS_ADMIN` in the compose file | Not needed | Only the benchmark's submit server uses it, for `unshare -n`. ARI's grader container has no network. |
 | `docker-compose.yaml`, the `are` MCP server, `tests/finalize.py` | Not used | They are the benchmark's own submit loop, which `record_candidate` replaces. `tests/test.sh` only reads that loop's ledger. |
 | `[agent]` network: an allowlist of `api.openai.com`, `api.anthropic.com` and `grader` | Kept, without `grader` | ARI applies it while the agents work, as Harbor does. `grader` is the benchmark's compose service, which is not started. The instructions say what the network reaches. |

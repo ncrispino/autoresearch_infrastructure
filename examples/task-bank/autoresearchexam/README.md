@@ -18,7 +18,7 @@ from the task's own files; nothing in the task is run:
 | `timeout` | `ARE_GRADE_TIMEOUT_SEC` there. The task's `[verifier] timeout_sec` belongs to the benchmark's ledger-reading step. |
 | `grader` | `environment/are-grader-ctx`, whose Dockerfile copies both scripts and both hidden splits into the image's `/tests` |
 | `feedback`, `sealed` | `/tests/intermediate.sh` and `/tests/test.sh` in that image |
-| `capabilities` | `CHOWN`, `SETUID`, `SETGID`: every CPU task's grader drops to the agent's uid with `runuser`, `setuid` or `chown` |
+| `capabilities` | Docker's default root capabilities without the network ones: `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `KILL`, `SETGID`, `SETUID`, `SETPCAP`, `AUDIT_WRITE`. The benchmark runs its graders with them, and they use them: a grader `chown`s each call's directory to the agent's uid and then `chmod`s it, which needs `FOWNER`, and kills the agent's processes, which needs `KILL`. The candidate runs as the agent's uid, without them. |
 
 It writes no rules, because the tasks state none that a reviewer could judge, so
 `local.toml` turns review off. Add rules to `task.py` before a run with a reviewer.

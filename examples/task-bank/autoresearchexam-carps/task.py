@@ -29,9 +29,10 @@ def task(run):
         sealed="/tests/test.sh",
         # The grader's own image, built from this directory. [task] grader_image names a prebuilt one.
         grader="environment/are-grader-ctx",
-        # The grader runs each call as uid 1001 with runuser. SYS_ADMIN, which the benchmark's
-        # server needs for `unshare -n`, is not needed: the grader container has no network.
-        capabilities=["CHOWN", "SETUID", "SETGID"],
+        # The root defaults the benchmark's grader runs with, without the network ones. It runs each call
+        # as uid 1001 and kills a hung call's processes (KILL). SYS_ADMIN, which the benchmark's server needs
+        # for `unshare -n`, is not needed: the grader container has no network.
+        capabilities=["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID", "SETPCAP", "AUDIT_WRITE"],
         rules=RULES,
         # The benchmark gives one agent 24 hours and many submissions.
         memory=ari.Memory(conversation_mode="continue", conversations="all"),

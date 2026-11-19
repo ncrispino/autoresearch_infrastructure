@@ -895,3 +895,44 @@ def test_a_missing_image_id_is_reported_as_missing_not_pulled(monkeypatch):
     assert calls == []
     harbor_deliverable._resolve("registry.example/grader@sha256:" + "a" * 64, None)
     assert calls == [["pull", "--quiet", "registry.example/grader@sha256:" + "a" * 64]]
+
+
+def are_task(root, *, gpus=0, paths="/app/output", timeout="1800"):
+    """A minimal task in AutoResearchExam's layout."""
+    materialize(root, {
+        "task.toml": f'[environment]\ncpus = 8\ngpus = {gpus}\n[agent]\nnetwork_mode = "allowlist"\n'
+                     'allowed_hosts = ["api.openai.com", "grader"]\n',
+        "instruction.md": "Write /app/output/answer.txt.\n",
+        "environment/Dockerfile": f"FROM {BASE}\nRUN mkdir -p /app/output\n",
+        "environment/docker-compose.yaml": (
+            "services:\n  main: {}\n  grader:\n    environment:\n"
+            f"      ARE_ARTIFACT_PATHS: \"{paths}\"\n      ARE_GRADE_TIMEOUT_SEC: \"{timeout}\"\n"),
+        "environment/are-grader-ctx/Dockerfile": f"FROM {BASE}\nCOPY . /tests\n",
+        "environment/are-grader-ctx/intermediate.sh": "echo 0.5 > /logs/verifier/reward.txt\n",
+        "environment/are-grader-ctx/test.sh": "echo 0.25 > /logs/verifier/reward.txt\n",
+    })
+    return root
+
+
+def test_the_autoresearchexam_importer_derives_task_py_from_the_tasks_own_files(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).parents[1] / "examples/task-bank/autoresearchexam"))
+    try:
+        import import_task
+    finally:
+        sys.path.pop(0)
+    source = are_task(tmp_path / "source")
+    found = import_task.derive(source)
+    assert (found["deliverable"], found["timeout"], found["problem"]) == ("/app/output", 1800, None)
+    assert "needs 1 GPU" in import_task.derive(are_task(tmp_path / "gpu", gpus=1))["problem"]
+    assert "names 2 deliverables" in import_task.derive(are_task(tmp_path / "two", paths="/a:/b"))["problem"]
+    monkeypatch.setattr(import_task.os, "cpu_count", lambda: 4)
+    assert import_task.main([str(source), str(tmp_path / "imported")]) == 0
+    written = (tmp_path / "imported/task.py").read_text()
+    for name in ("FOWNER", "KILL", "SETUID", "DAC_OVERRIDE"):  # the grader's root defaults, which it uses
+        assert f'"{name}"' in written or f"'{name}'" in written
+    assert "timeout=1800" in written and "deliverable='/app/output'" in written
+    assert "cpus = 4" in (tmp_path / "imported/local.toml").read_text()
+    (tmp_path / "imported/seed").mkdir()
+    run = launch.open_run(tmp_path / "imported", tmp_path / "imported/local.toml", tmp_path / "run", None)
+    assert run.task.evaluator.scripts["sealed"].as_posix() == "/tests/test.sh"
+    assert run.task.evaluator.mount_tests is False  # the grader image keeps its own /tests
