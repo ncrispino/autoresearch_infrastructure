@@ -7,8 +7,8 @@ at commit `23c0d92e11af1dea821f972b5f0a739060958002`. The researcher writes
 `/app/output/select_subset.py`, which picks `k` of `n` points in the unit cube with
 low star discrepancy. The task's own grader scores it.
 
-The import was checked by grading, with no agent and no model. No researcher has
-run on it yet. See [What was observed](#what-was-observed).
+The import was checked by grading alone, then with one short Codex researcher run.
+See [What was observed](#what-was-observed).
 
 ## Fetch the task
 
@@ -79,15 +79,42 @@ Two differences from a native run apply to these numbers:
   `[task] grader_image` and `[task] image`. Their Dockerfiles were otherwise
   unchanged. On an ordinary machine, leave those out and ARI builds them.
 
+### A researcher run
+
+One live run with Codex 0.170.0 and `gpt-6-luna` as researcher and reviewer, on
+the baseline plus two proposals, with review on. The agents ran in the task's own
+image with Node, ripgrep and the Codex CLI added (the `[task] image`), under the
+task's `[agent]` network allowlist; Codex called the model from inside the
+container. The sandbox where this ran also needed its TLS proxy's CA in that
+image; an ordinary machine does not.
+
+| Candidate | Parent | Review | Feedback (`intermediate`) | Sealed (`final`) |
+| --- | --- | --- | --- | --- |
+| `candidate-0001`: the empty starter | none | valid | 0 | 0 |
+| `candidate-0002`: greedy balancing of anchored boxes on a 16³ grid, then exchanges | `candidate-0001` | valid | 0.525 | 0.560 |
+| `candidate-0003` | `candidate-0002` | valid | 0.586 | 0.643 |
+
+The run took about 6½ minutes and reported $0.027 of model cost. The sealed score
+rose with the feedback score, so the selected candidate did not overfit the split
+the researcher was shown. It used two researcher starts, not one continuing
+session: after the first submission the reply said to submit again, but also
+carried a null remaining count, and Codex took that as nothing left. That reply
+has since been made explicit.
+
+Getting here found three problems, all fixed in ARI:
+
+- The reviewer's container asked Docker for the task's 8 CPUs on a 4-CPU machine.
+  `[task] cpus` now applies to the agents' container as well as the grader.
+- An empty starter could never pass review: a pass had to cite a file, and the
+  empty candidate had none. A pass may now cite the candidate directory itself
+  when it holds no files, for a rule it cannot break.
+- The importer's first rules were written as requirements, which an empty
+  starter fails. They are now prohibitions; what the deliverable must contain is
+  the grader's to score.
+
 ## Not yet checked
 
-- **A researcher in this container.** `ari check` with [run.toml](run.toml) opens the
-  task and derives the agents' environment from the task's image. That
-  environment holds only `environment/` without `are-grader-ctx/`. No agent has
-  started in it.
-- **The agent's network with a real agent.** The allowlist is carried over and its
-  enforcement was tested through ARI's own agent path with a probe agent, not
-  with this task's image or a model. Terminus-2, in [run.toml](run.toml), calls
-  its model from the host. Codex or Claude Code would call it from inside the
-  container, so a provider other than OpenAI or Anthropic needs
-  `allowed_hosts` under `[task]`.
+- **A longer run.** Two proposals show the loop works; they say nothing about how
+  far a researcher can take this task in the benchmark's 24 hours.
+- **Codex with another provider.** A provider other than OpenAI or Anthropic needs
+  its host under `[task] allowed_hosts`, which no run has used yet.
