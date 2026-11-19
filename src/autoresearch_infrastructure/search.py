@@ -128,11 +128,14 @@ class SubmissionRecorder:
                 self.closed = str(stop.value)
         if self.closed:
             return {**result, "next": None, "stopped": self.closed}
-        return {**result, "next": {
-            "parent_id": self.parent_id,
-            "remaining": None if self.limit is None else self.limit - self.attempts,
-            "note": f"/workspace/candidate/ now holds a fresh copy of {self.parent_id}. Edit it and submit again.",
-        }}
+        # Say plainly that the session goes on: a null count read as "none left" ended a real session early.
+        following = {"parent_id": self.parent_id,
+                     "note": f"This session continues. /workspace/candidate/ now holds a fresh copy of "
+                             f"{self.parent_id}, the best candidate so far. Edit it and submit again; the reply to "
+                             "that submission says whether another fits the budget."}
+        if self.limit is not None:
+            following["remaining_in_this_session"] = self.limit - self.attempts
+        return {**result, "next": following}
 
 
 def reset_candidate(research, parent_id: str) -> None:

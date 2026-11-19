@@ -224,7 +224,8 @@ def test_one_session_makes_k_proposals_then_a_fresh_session_begins(example, monk
     assert first["starting_values"] == [0, 4, 4]  # reset to the selected candidate, not the last submission
     assert [r["next"] and r["next"]["parent_id"] for r in first["replies"]] == [
         "candidate-0002", "candidate-0002", None]
-    assert first["replies"][0]["next"]["remaining"] == 2
+    assert first["replies"][0]["next"]["remaining_in_this_session"] == 2
+    assert first["replies"][0]["next"]["note"].startswith("This session continues.")
     assert first["replies"][2]["stopped"] == "this session's candidates are used"
     # /history is live: the session sees its own earlier candidates after each submission.
     assert first["history"][2] == ["candidate-0001", "candidate-0002", "candidate-0003"]
@@ -577,3 +578,18 @@ def test_transformation_helpers_check_their_arguments():
     with pytest.raises(ValueError, match="no rule 3"):
         transforms.omit_rule(3)(inputs)
     assert transforms.omit_rule(2).identity == {"transform": "omit_rule", "number": 2}
+
+
+def test_an_unlimited_session_is_told_it_continues_without_a_null_count():
+    from autoresearch_infrastructure.search import SubmissionRecorder
+
+    class Research:
+        def dispatch_record_candidate(self, session_id, arguments):
+            return {"candidate_id": "candidate-0002", "status": "valid"}
+
+    recorder = SubmissionRecorder(Research(), "candidate-0001", 1, limit=None, advance=lambda: "candidate-0002")
+    reply = recorder.dispatch_record_candidate("research", {
+        "candidate": "workspace", "proposal": {"hypothesis": "h", "mechanism": "m"}})
+    assert reply["next"]["parent_id"] == "candidate-0002"
+    assert "remaining_in_this_session" not in reply["next"] and None not in reply["next"].values()
+    assert reply["next"]["note"].startswith("This session continues.")
