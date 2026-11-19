@@ -46,9 +46,75 @@ is "no submission".
 | `cap_add: SYS_ADMIN` in the compose file | Not needed | Only the benchmark's submit server uses it, for `unshare -n`. ARI's grader container has no network. |
 | `docker-compose.yaml`, the `are` MCP server, `tests/finalize.py` | Not used | They are the benchmark's own submit loop, which `record_candidate` replaces. `tests/test.sh` only reads that loop's ledger. |
 | `[agent]` network: an allowlist of `api.openai.com`, `api.anthropic.com` and `grader` | Kept, without `grader` | ARI applies it while the agents work, as Harbor does. `grader` is the benchmark's compose service, which is not started. The instructions say what the network reaches. |
-| No rules in `instruction.md` | Two rules, written by the importer | The reviewer needs rules to judge. They are marked as the importer's in `task.py`. |
-| `budget_seconds = 86400`, many submissions | `ari.Memory(conversation_mode="continue", conversations="all")` and `override_timeout_sec = 86400` in `run.toml` | One researcher session for 24 hours, as the benchmark runs an agent. |
+| `instruction.md` | `split="instruction-split.toml"` | Each span goes to the objective, a named rule, a named environment note, or is dropped with a reason. See [How instruction.md is split](#how-instructionmd-is-split). |
+| `[agent] timeout_sec = 86400`, many submissions | `ari.Memory(conversation_mode="continue", conversations="all")`; the researcher's timeout defaults to the task's 86400 seconds | One researcher session for 24 hours, as the benchmark runs an agent. `override_timeout_sec` in `run.toml` replaces it. |
 | `hints/hint.md` | Not used | The benchmark keeps hints apart from the instruction. |
+
+## How instruction.md is split
+
+[instruction-split.toml](instruction-split.toml) divides the benchmark's
+`instruction.md` into ARI's parts. `ari check` and every run refuse the task if a
+span of the source is in no part, is in two, or no longer occurs exactly once, so
+an upstream edit to the instruction cannot slip through unnoticed. The whole
+mapping, with the hashes of the split and the source, is recorded in the run's
+`plan.json` under `inputs.instruction_split`.
+
+Each part is tagged:
+
+- **verbatim**: the source's own words.
+- **adapted**: new words for a source span, with the reason.
+- **added**: new words with no source, with the reason. Here only `no_lookup`.
+
+A rule's last column says what enforces it besides the reviewer. A rule the grader
+already enforces is still listed, so the researcher knows of it before a submission
+fails. A rule only the reviewer can judge says so.
+
+| # | Goes to | Tag | Name | Source in `instruction.md` | Text the researcher sees instead | Reason | What enforces it besides the reviewer |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | dropped |  |  | # Low-discrepancy subset selection | (dropped) | The title; ARI shows it as the task's title, set in this file. |  |
+| 2 | objective | verbatim |  | You get a cloud of `n` points in the unit cube `[0,1]^3` and a subset … | (the source, unchanged) |  |  |
+| 3 | objective | adapted |  | ## Submission format | ### Submission format | Heading demoted to fit under ARI's Objective section. |  |
+| 4 | objective | verbatim |  | Write `/app/output/select_subset.py`, defining exactly one entry point … | (the source, unchanged) |  |  |
+| 5 | objective | verbatim |  | `seed`: int. | (the source, unchanged) |  |  |
+| 6 | rule | adapted | `seeded` | Use it for any randomness so a call is reproducible. | Do not use randomness that `seed` does not determine: the same call must return the same subset. | Made a prohibition, so the empty starter passes review. | Nothing besides the reviewer: the grader does not rerun a call. |
+| 7 | objective | verbatim |  | `time_budget_s`: float, `10.0` at grade time. | (the source, unchanged) |  |  |
+| 8 | rule | adapted | `time_budget` | `select` must return within it. | Do not let `select` run past `time_budget_s`. | Made a prohibition, so the empty starter passes review. | The grader kills a call `time_budget_s + 5` seconds after it starts and scores that cloud as no subset. |
+| 9 | objective | verbatim |  | - Return value: any iterable of exactly `k` distinct integer indices i … | (the source, unchanged) |  |  |
+| 10 | dropped |  |  | ## Data notes | (dropped) | Section heading; its lines are environment notes. |  |
+| 11 | environment | verbatim | `example_clouds` | Example clouds live in `/app/data/examples/`. | (the source, unchanged) |  |  |
+| 12 | environment | verbatim | `manifest` | `/app/data/examples/manifest.json` lists each cloud's file name, `n`, … | (the source, unchanged) |  |  |
+| 13 | environment | verbatim | `sealed_clouds` | Grading uses sealed clouds drawn the same way; your code sees them for … | (the source, unchanged) |  |  |
+| 14 | objective | adapted |  | ## Metric and scoring | ### Metric and scoring | Heading demoted to fit under ARI's Objective section. |  |
+| 15 | objective | verbatim |  | - `select` is called once per (cloud, seed) pair. - You're scored on t … | (the source, unchanged) |  |  |
+| 16 | dropped |  |  | ## Execution environment | (dropped) | Section heading; its lines are environment notes and rules. |  |
+| 17 | environment | verbatim | `graded_separately` | Grading runs in a separate environment from this one, and only … | (the source, unchanged) |  |  |
+| 18 | rule | adapted | `self_contained` | So your solution must be fully self-contained there: if `select_subset.py` imports a helper module you wrote, that module must also live under `/app/output`. | Do not make the solution depend on files you wrote outside `/app/output`: a helper module it imports must be there too. | Made a prohibition, about the files you write, not the installed packages. | Grading: only `/app/output` carries over, so anything else is missing there. |
+| 19 | environment | verbatim | `fresh_process` | Each call runs in a fresh process pinned to a single CPU. | (the source, unchanged) |  |  |
+| 20 | environment | verbatim | `read_only_output` | `/app/output` is mounted read-only at grade time. A scratch working di … | (the source, unchanged) |  |  |
+| 21 | environment | verbatim | `kill_deadline` | The process is SIGKILLed `time_budget_s + 5` seconds after it starts. … | (the source, unchanged) |  |  |
+| 22 | environment | verbatim | `packages` | Available packages: the Python standard library, numpy, and scipy. No … | (the source, unchanged) |  |  |
+| 23 | dropped |  |  | `/app/output` is writable now; everything else is read-only. | (dropped) | Not true in ARI's container, where `/workspace` and `/tmp` are writable too; ARI's ari_container note states the writable paths. |  |
+| 24 | rule | adapted | `no_links` | Everything under `/app/output` must be a regular file. A symbolic or hard link anywhere in that tree makes the whole submission unscoreable. | Do not put a symbolic or hard link anywhere under `/app/output`: everything there must be a regular file. | Two sentences made one prohibition. | The grader refuses the whole submission, and ARI does not save links in a candidate. |
+| 25 | objective | adapted |  | ## Invalid submissions | ### Invalid submissions | Heading demoted to fit under ARI's Objective section. |  |
+| 26 | objective | verbatim |  | - If a call is killed, raises, or returns anything other than exactly … | (the source, unchanged) |  |  |
+| 27 | rule | added | `no_lookup` | (none) | Do not store subsets, indices or results chosen for particular clouds, or return them in place of a subset computed from the points `select` is given. | The importer's: the task states no rule against stored answers, and only a reviewer can judge it. | Nothing besides the reviewer: graded clouds are sealed, so a stored answer for them cannot exist, but one for the example clouds could. |
+
+Long sources are cut short in this table; the TOML has them in full.
+
+ARI adds its own environment notes after the task's, also by name, so a study can
+omit or reword any of them like the task's own: `ari_deliverable` (when the
+deliverable is not `/workspace/candidate`), `ari_submission`, `ari_grader`,
+`ari_network`, `ari_container` and `ari_budget`. A split may not reuse those names.
+
+A study that perturbs the inputs names what it changes:
+
+```python
+transforms=[ari.transforms.omit_rule("no_lookup"),
+            ari.transforms.reword_environment_note("packages", "Some scientific Python packages are installed.")]
+```
+
+The names stay with their text, so omitting one rule does not rename the others,
+and the reviewer's verdicts are keyed by the same names.
 
 ## What was observed
 

@@ -73,8 +73,8 @@ def load(split: Path, instruction: Path, *, title: str = "") -> tuple[Instructio
     parts = [_part(entry, number) for number, entry in enumerate(table.get("part") or [], 1)]
     if not parts:
         raise ValueError(f"{split} has no [[part]] tables")
-    _check_coverage(parts, source, instruction)
-    objective = "\n\n".join(part.wording for part in parts if part.to == "objective")
+    positions = _check_coverage(parts, source, instruction)
+    objective = _join_objective(parts, positions, source)
     for line in objective.splitlines():
         if re.match(r"#{1,2}\s", line):
             raise ValueError(f"The objective has the heading {line.strip()!r}. It is placed under ARI's "
@@ -134,8 +134,36 @@ def _part(entry, number: int) -> Part:
     return part
 
 
-def _check_coverage(parts: list[Part], source: str, instruction: Path) -> None:
+def _join_objective(parts: list[Part], positions: dict, source: str) -> str:
+    """The objective parts in order, keeping the list a moved bullet came from.
+
+    A part that starts after a list marker keeps that marker, and parts on
+    consecutive lines of the source stay on consecutive lines, so a list whose
+    middle bullet half moved to Rules still renders as a list.
+    """
+    text, previous = "", None
+    for number, part in enumerate(parts, 1):
+        if part.to != "objective":
+            continue
+        wording = part.wording
+        place = positions.get(number)
+        if place is not None:
+            line_start = source.rfind("\n", 0, place[0]) + 1
+            lead = source[line_start:place[0]]
+            if re.fullmatch(r"[ \t]*[-*+][ \t]+", lead) and not wording.lstrip().startswith(("-", "*", "+")):
+                wording = lead.strip() + " " + wording
+        # One line break apart in the source: whatever lies between went to another part.
+        joined_by_line = (place is not None and previous is not None
+                          and source.count("\n", previous[1], place[0]) == 1)
+        text += ("" if not text else "\n" if joined_by_line else "\n\n") + wording
+        previous = place
+    return text
+
+
+def _check_coverage(parts: list[Part], source: str, instruction: Path) -> dict:
+    """Check that the parts cover the source once, and return where each sourced part sits in it."""
     covered = [None] * len(source)
+    positions = {}
     for number, part in enumerate(parts, 1):
         if part.source is None:
             continue
@@ -145,6 +173,7 @@ def _check_coverage(parts: list[Part], source: str, instruction: Path) -> None:
             raise ValueError(f"part {number}: its source occurs {len(found)} times in {instruction.name}, not "
                              f"once: {_preview(span)}")
         start = found[0]
+        positions[number] = (start, start + len(span))
         for index in range(start, start + len(span)):
             if covered[index] is not None:
                 raise ValueError(f"part {number} overlaps part {covered[index]} at {_preview(source[index:])}")
@@ -174,6 +203,7 @@ def _check_coverage(parts: list[Part], source: str, instruction: Path) -> None:
             if (part.to, part.name) in names:
                 raise ValueError(f"Two {part.to} parts are named {part.name!r}")
             names[(part.to, part.name)] = True
+    return positions
 
 
 def _preview(text: str) -> str:

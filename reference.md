@@ -110,8 +110,9 @@ The limits also fix the agent starts: one reviewer start for each candidate, and
 one researcher start for each candidate after the baseline. See
 [Starts and the ledger](#starts-and-the-ledger).
 
-The researcher's timeout (`override_timeout_sec`) defaults to 600 seconds and the
-reviewer's to 240. The reviewer's maximum is 7200 seconds. The researcher's is
+The researcher's timeout (`override_timeout_sec`) defaults to the task's own
+limit when it has one, as a Harbor task's `[agent] timeout_sec` is for
+`harbor_deliverable`, and otherwise to 600 seconds. The reviewer's defaults to 240. The reviewer's maximum is 7200 seconds. The researcher's is
 86400, a day, for one session that makes every proposal of a run; see
 [A benchmark's time budget](#a-benchmarks-time-budget). A reviewer that defaults
 to the researcher's agent cannot inherit a timeout over 7200, so give it its own
@@ -687,7 +688,8 @@ def task(run):
 | `seed` | The starting deliverable, a directory relative to the task file. The default is `environment/candidate` in the Harbor task, the directory its Dockerfile copies to `deliverable`, so the files exist once. Without that directory it is `seed/` beside the task file. |
 | `check_seed` | `True` (the default) compares the seed with what the task's image holds at `deliverable` before the baseline, and refuses the run if they differ, naming each file. `False` skips this, to start from files of your own. |
 | `grader` | Where the scripts run. The default is the task's main image, with the task's `tests/` mounted at `/tests`. A directory in the Harbor task that holds the grader's own Dockerfile, such as `"environment/grader"`, is built instead, or an image pinned by digest is used; either is used as it is, with nothing mounted at `/tests`, and the scripts are paths inside it that are checked before the baseline. Name the directory even when its image is already built, and give that image as `grader_image = "sha256:..."` under `[task]`, so that the directory is still left out of the agents' container. |
-| `rules`, `environment` | Lists added to `instruction.md`, which becomes the written objective. Pass `instructions` instead to write all three parts yourself. |
+| `split` | A TOML file, relative to the task file, that divides `instruction.md` into the objective, named rules and named environment notes, and drops the rest with a reason. See [Splitting an imported instruction](#splitting-an-imported-instruction). |
+| `rules`, `environment` | Without a split: lists added to `instruction.md`, which becomes the written objective unchanged. Pass `instructions` instead to write all three parts yourself. |
 | `objective`, `rewards` | The default objective is the metric `reward`, higher is better, read from the feedback script's single reward. For other rewards, pass an objective and `rewards={METRIC: "reward_key"}` together. |
 | `validity` | An optional validity function. |
 | `task_environment` | `True` (the default) runs the researcher and the reviewer in the Harbor task's main container. `False` runs them in `--image`. |
@@ -800,6 +802,69 @@ one script and three rewards, and the
 [threshold-deliverable example](examples/threshold-deliverable/README.md), which
 has a sealed split.
 
+#### Splitting an imported instruction
+
+Without a split, `instruction.md` becomes the objective as it is, and your
+`rules` and `environment` are added. That copies the task's own constraints,
+time limits and submission instructions into the objective, where the reviewer
+does not judge them and some are no longer true. A split adapts the instruction
+to ARI's parts instead, with every change recorded:
+
+```python
+ari.bases.harbor_deliverable(run, harbor_task="harbor-task", deliverable="/app/output",
+                             split="instruction-split.toml")
+```
+
+```toml
+title = "Low-discrepancy subset selection"
+
+[[part]]
+to = "dropped"
+source = "# Low-discrepancy subset selection"
+reason = "The title; ARI shows it as the task's title."
+
+[[part]]
+to = "objective"
+tag = "verbatim"
+source = "You get a cloud of `n` points ..."     # the exact text, which must occur once
+
+[[part]]
+to = "rule"
+tag = "adapted"
+name = "time_budget"
+source = "`select` must return within it."
+text = "Do not let `select` run past `time_budget_s`."
+reason = "Made a prohibition, so the empty starter passes review."
+enforced = "The grader kills a call `time_budget_s + 5` seconds after it starts."
+
+[[part]]
+to = "rule"
+tag = "added"
+name = "no_lookup"
+text = "Do not store subsets chosen for particular clouds."
+reason = "The importer's: the task states no rule against stored answers."
+```
+
+| Key | Meaning |
+| --- | --- |
+| `to` | `objective`, `rule`, `environment` or `dropped`. Objective parts are joined in order; parts on consecutive source lines stay on consecutive lines, and a part that followed a list marker keeps it. An objective heading must be `###` or lower, since it sits under ARI's `## Objective`. |
+| `tag` | `verbatim` (the source as it is), `adapted` (`text` replaces `source`, with a `reason`) or `added` (new `text`, no `source`, with a `reason`). A dropped part has no tag, and needs a `reason`. |
+| `name` | A rule's or note's stable name: lowercase letters, digits and underscores. |
+| `enforced` | A rule only: what enforces it besides the reviewer, such as the grader, or that nothing does. |
+
+The split is checked whenever the task opens, including by `ari check`: each
+`source` must occur exactly once in `instruction.md`, no two may overlap, and
+every non-blank character must be in some part, except a list marker at the
+start of a line. A miss names the line and the text. The plan records the whole
+mapping with the hashes of the split and the source as `inputs.instruction_split`.
+
+ARI's own environment notes follow the task's, by name: `ari_deliverable`,
+`ari_submission`, `ari_grader`, `ari_network`, `ari_container` and `ari_budget`.
+A split may not use those names. Without a split the rules are named `rule_1`,
+`rule_2`, … and the notes `note_1`, `note_2`, …. The reviewer's checks use the
+same names. [The carps example](examples/task-bank/autoresearchexam-carps/TASK.md#how-instructionmd-is-split)
+shows a full split, part by part.
+
 #### A benchmark's time budget
 
 A benchmark task usually gives one agent a wall-clock budget and lets it submit
@@ -814,12 +879,16 @@ ari.bases.harbor_deliverable(..., memory=ari.Memory(conversation_mode="continue"
 candidates = 41              # the baseline plus up to 40 submissions
 evaluations = 41
 
-[researcher]
-override_timeout_sec = 86400 # the benchmark's 24 hours, for the one session
+[researcher]                 # its timeout is the task's [agent] timeout_sec, here 86400
 
 [reviewer]                   # its own table: a reviewer's timeout is at most 7200
 override_timeout_sec = 240
 ```
+
+The researcher's timeout defaults to the task's `[agent] timeout_sec`, capped at
+86400; `override_timeout_sec` under `[researcher]` replaces it. The plan records
+the default as `inputs.researcher_timeout`, and the session is told its budget in
+the `ari_budget` note.
 
 One researcher session then makes every proposal, so the run normally uses one
 researcher start; if the agent stops early, the next start is a fresh
@@ -1223,11 +1292,14 @@ maps `ResearcherInputs` to `ResearcherInputs`, in order, before anything is
 shown:
 
 ```python
-ari.Task(..., transforms=[ari.transforms.omit_rule(2), ari.transforms.omit_measured()])
+ari.Task(..., transforms=[ari.transforms.omit_rule("time_budget"), ari.transforms.omit_measured()])
 ```
 
 `ari.transforms` has `omit_rule`, `reword_rule`, `add_rule`, `replace_goal`,
-`add_environment_note` and `omit_measured`. Rules are numbered from 1. A
+`add_environment_note`, `omit_environment_note`, `reword_environment_note` and
+`omit_measured`. A rule or note is found by its name or by its number counted
+from 1. Names stay with their text: omitting `rule_2` leaves the next rule named
+`rule_3`, and `add_rule(text, name=...)` names a new one. A
 transform may not change the memory or the environment. The monitor is part of
 the run, so the reviewer judges the changed rules and reads the changed text.
 The plan records each transform with its arguments, and the original task text

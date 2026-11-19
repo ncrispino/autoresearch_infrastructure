@@ -53,8 +53,14 @@ run is measured". A suggestion about approach can close it.
 4. **Decide what the evaluator is.** Reuse the source task's grader where you
    can. If the source task is a Harbor task that grades a deliverable, use it as
    it is with `ari.bases.harbor_deliverable`, described in
-   [Harbor tasks](harbor-harness.md#improve-a-harbor-tasks-deliverable). The
-   instruction then becomes the Objective unsplit, and you add only the Rules.
+   [Harbor tasks](harbor-harness.md#improve-a-harbor-tasks-deliverable). Record
+   steps 2 and 3 as a split of its `instruction.md` (`split="instruction-split.toml"`):
+   each span goes to the objective, a named rule, a named environment note, or is
+   dropped with a reason, tagged verbatim, adapted or added. ARI refuses the task
+   if a span is missed, so the mapping stays complete when the source changes.
+   Drop what ARI's loop replaces, such as a submission tool or a time limit, and
+   a sentence that is not true in ARI's container. Write rules as prohibitions,
+   and say in `enforced` what besides the reviewer enforces each one.
 5. **Write down what does not fit.** Do not bend the task to hide a gap. The
    common gaps are listed at the end of this guide.
 
