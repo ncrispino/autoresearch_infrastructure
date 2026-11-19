@@ -109,6 +109,12 @@ def test_feedback_is_the_public_score_and_the_sealed_score_stays_in_private_evid
     assert "0.123456" not in text and "hidden" not in text
     assert "0.123456" in "".join(path.read_text() for path in (root / "private").rglob("sealed.json"))
 
+    # The results page says a sealed score exists, and shows nothing of it.
+    from autoresearch_infrastructure.viewer import build_index
+
+    index = json.dumps(build_index(tmp_path / "run/research"))
+    assert '"sealed_recorded": true' in index and "0.123456" not in index
+
 
 def test_a_failed_sealed_script_is_recorded_privately_and_does_not_change_the_measurement(tmp_path, monkeypatch):
     def grade(self, candidate, script, evidence, case):
@@ -831,3 +837,23 @@ def test_the_sweep_is_skipped_where_there_is_no_docker(tmp_path, monkeypatch):
     monkeypatch.setattr(harbor_deliverable.subprocess, "run", missing)
     grader._sweep()  # does not raise; the image build is what reports the missing docker
     assert grader._swept is False
+
+
+def test_the_results_page_counts_an_empty_candidates_files(tmp_path, monkeypatch):
+    from autoresearch_infrastructure.viewer import build_index
+
+    monkeypatch.setattr(HarborGraderEvaluator, "grade", lambda self, candidate, script, evidence, case: {"reward": 0.0})
+    monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
+    monkeypatch.setattr(HarborGraderEvaluator, "prepare", lambda self: None)
+    harbor_task(tmp_path / "task/harbor-task")
+    (tmp_path / "task/seed").mkdir()  # the starter is empty, as AutoResearchExam's often is
+    (tmp_path / "task/task.py").write_text(
+        "import autoresearch_infrastructure as ari\n\n\ndef task(run):\n"
+        "    return ari.bases.harbor_deliverable(run, harbor_task='harbor-task', feedback='/tests/feedback.sh',"
+        " sealed=None)\n")
+    (tmp_path / "task/settings.toml").write_text("reviewer = false\n")
+    run = launch.open_run(tmp_path / "task", tmp_path / "task/settings.toml", tmp_path / "run", None)
+    with run.research:
+        launch.record_workspace(run)
+    session = next(entry for entry in build_index(tmp_path / "run/research")["sessions"] if entry["id"] == "research")
+    assert session["candidates"][0]["file_count"] == 0

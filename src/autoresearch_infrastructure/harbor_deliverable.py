@@ -199,7 +199,7 @@ class HarborGraderEvaluator:
             cpus = requested
         if type(cpus) not in (int, float) or not 0 < cpus <= host:
             raise ValueError(f"grader_cpus must be positive and at most this machine's {host:g} CPUs")
-        self.cpus = float(cpus)
+        self.cpus, self.task_cpus = float(cpus), requested
         self.timeout = verifier.get("timeout_sec", 600) if timeout is None else timeout
         self.env = {**verifier.get("env", {})}
         if any(not isinstance(value, str) or "${" in value for value in self.env.values()):
@@ -423,7 +423,7 @@ class HarborGraderEvaluator:
             write_json(private / SEALED_RECORD, {"candidate_hash": context.candidate_hash, "case": context.task,
                                                  "repeat": context.repeat, **sealed})
         return Evaluation(metrics, metadata={"feedback_rewards": rewards, "grader_image": self.image(),
-                                             "grader_cpus": self.cpus})
+                                             "grader_cpus": self.cpus, "task_cpus": self.task_cpus})
 
 
 def _rewards(logs: Path) -> dict | None:
