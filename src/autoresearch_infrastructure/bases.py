@@ -139,8 +139,8 @@ def harbor_deliverable(
 
     A task whose ``[environment]`` asks for more CPUs than this machine has is
     refused when it opens, since a grader with time limits would score
-    differently. ``grader_cpus = N`` under ``[task]`` in the run settings
-    grades with ``N`` instead, and is recorded with the run.
+    differently. ``cpus = N`` under ``[task]`` in the run settings gives the
+    grader and the agents ``N`` instead, and is recorded with the run.
 
     ``timeout`` is the seconds each grader script may run. The default is the
     task's ``[verifier] timeout_sec``.
@@ -171,7 +171,7 @@ def harbor_deliverable(
         rewards=rewards, capabilities=capabilities, network=network, feedback_log=feedback_log,
         feedback_artifacts=feedback_artifacts, seed=run.directory / seed if check_seed else None,
         task_image=run.settings.task.get("image"), grader_image=run.settings.task.get("grader_image"),
-        timeout=timeout, cpus=run.settings.task.get("grader_cpus"),
+        timeout=timeout, cpus=run.settings.task.get("cpus"),
     )
     elsewhere = deliverable.rstrip("/") != _CANDIDATE
     harbor = None
@@ -179,7 +179,8 @@ def harbor_deliverable(
         hidden = list(private) + ([grader] if evaluator.context is not None and grader is not None else [])
         harbor = deliverables.researcher_environment(task, state / "researcher-environment", private=hidden,
                                                      image=run.settings.task.get("image"),
-                                                     allowed_hosts=run.settings.task.get("allowed_hosts", ()))
+                                                     allowed_hosts=run.settings.task.get("allowed_hosts", ()),
+                                                     cpus=run.settings.task.get("cpus"))
     if instructions is None:
         source = task / "instruction.md"
         if not source.is_file() or not source.read_text(encoding="utf-8").strip():

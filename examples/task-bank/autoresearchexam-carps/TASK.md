@@ -69,7 +69,7 @@ public file of the run.
 Two differences from a native run apply to these numbers:
 
 - **CPUs.** The task asks for 8 and the machine had 4, so the run settings said
-  `grader_cpus = 4`; without it ARI refuses to grade on fewer CPUs than the task
+  `cpus = 4` under `[task]`; without it ARI refuses to grade on fewer CPUs than the task
   asks for. This grader runs as many calls at a time as it has CPUs, each with
   its own 10-second budget, so fewer CPUs make grading slower here rather than
   changing the score.

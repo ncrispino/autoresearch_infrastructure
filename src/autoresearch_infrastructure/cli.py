@@ -1,6 +1,7 @@
 """The ``ari`` command: open a task, run it, and view the results."""
 
 import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -91,7 +92,12 @@ def _task_command(args) -> int:
                                   reevaluates=args.source if args.command == "import" else None,
                                   reviewer_image=args.reviewer_image)
             with run.research:
-                summary = action(run)
+                if args.json:
+                    # Harbor prints progress to stdout; --json promises one JSON document there.
+                    with contextlib.redirect_stdout(sys.stderr):
+                        summary = action(run)
+                else:
+                    summary = action(run)
     except (ValueError, RuntimeError, OSError) as error:
         print(f"ari {args.command}: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

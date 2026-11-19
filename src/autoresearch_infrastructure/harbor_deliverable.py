@@ -195,10 +195,10 @@ class HarborGraderEvaluator:
                 raise ValueError(
                     f"The task's grader asks for {requested:g} CPUs and this machine has {host:g}. A grader with "
                     "time limits scores differently on fewer CPUs, so grade on a larger machine, or accept "
-                    f"fewer by writing grader_cpus = {host:g} under [task] in the run settings")
+                    f"fewer by writing cpus = {host:g} under [task] in the run settings")
             cpus = requested
         if type(cpus) not in (int, float) or not 0 < cpus <= host:
-            raise ValueError(f"grader_cpus must be positive and at most this machine's {host:g} CPUs")
+            raise ValueError(f"[task] cpus must be positive and at most this machine's {host:g} CPUs")
         self.cpus, self.task_cpus = float(cpus), requested
         self.timeout = verifier.get("timeout_sec", 600) if timeout is None else timeout
         self.env = {**verifier.get("env", {})}
@@ -576,7 +576,7 @@ def _image_present(image: str) -> bool:
 
 
 def researcher_environment(task: Path, destination: Path, *, private=(), image: str | None = None,
-                           allowed_hosts=()) -> Path:
+                           allowed_hosts=(), cpus: float | None = None) -> Path:
     """Write a Harbor environment for the researcher: the task's main container and nothing of its grader.
 
     The copy holds ``task.toml`` with only the ``[environment]`` table and the
@@ -590,6 +590,9 @@ def researcher_environment(task: Path, destination: Path, *, private=(), image: 
 
     ``image`` is an image pinned by digest to run instead of building the
     Dockerfile: the task's image with what an agent needs added to it.
+
+    A task that asks for more CPUs than this machine has is refused, as for its
+    grader, unless ``cpus`` gives the number to use instead.
 
     The task's ``[agent]`` network policy is kept, so the agents can reach what
     an agent under ``harbor run`` can, and only while they run. Hosts that
@@ -608,6 +611,15 @@ def researcher_environment(task: Path, destination: Path, *, private=(), image: 
     agent = _agent_policy(task, manifest.get("agent") or {}, list(allowed_hosts))
     for name in ("workdir", "skills_dir", "mcp_servers"):  # ARI sets the first two and replaces the submit tool
         table.pop(name, None)
+    requested, host = float(table.get("cpus", 1)), float(os.cpu_count() or 1)
+    if cpus is not None:
+        if type(cpus) not in (int, float) or not 0 < cpus <= host:
+            raise ValueError(f"[task] cpus must be positive and at most this machine's {host:g} CPUs")
+        table["cpus"] = cpus
+    elif requested > host:
+        raise ValueError(f"The task's container asks for {requested:g} CPUs and this machine has {host:g}. Run on "
+                         f"a larger machine, or accept fewer by writing cpus = {host:g} under [task] in the run "
+                         "settings")
     if image is not None:
         if not _PINNED.fullmatch(str(image)):
             raise ValueError("[task] image must be an image ID or digest (sha256:...)")

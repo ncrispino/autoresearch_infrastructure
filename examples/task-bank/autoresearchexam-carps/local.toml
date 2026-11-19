@@ -6,6 +6,6 @@ candidates = 4
 evaluations = 4
 
 # [task]
-# grader_cpus = 4               # only on a machine with fewer than the task's 8 CPUs
+# cpus = 4                      # only on a machine with fewer than the task's 8 CPUs
 # grader_image = "sha256:..."   # a grader image already built from environment/are-grader-ctx
 # image = "sha256:..."          # the task's main image, already built; the seed is checked against it

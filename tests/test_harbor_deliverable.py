@@ -614,7 +614,7 @@ def test_the_seed_is_read_from_the_agent_ready_image_when_the_settings_name_one(
 def test_a_grader_needing_more_cpus_than_the_host_is_refused_unless_fewer_are_accepted(tmp_path, monkeypatch):
     monkeypatch.setattr(harbor_deliverable.os, "cpu_count", lambda: 4)
     task = harbor_task(tmp_path / "harbor-task", **{"task.toml": '[environment]\ncpus = 8\n'})
-    with pytest.raises(ValueError, match="asks for 8 CPUs and this machine has 4.*grader_cpus = 4"):
+    with pytest.raises(ValueError, match="asks for 8 CPUs and this machine has 4.*cpus = 4 under"):
         evaluator(tmp_path, task=task)
     assert evaluator(tmp_path / "accepted", task=task, cpus=4).cpus == 4
     with pytest.raises(ValueError, match="at most this machine's 4 CPUs"):
@@ -857,3 +857,30 @@ def test_the_results_page_counts_an_empty_candidates_files(tmp_path, monkeypatch
         launch.record_workspace(run)
     session = next(entry for entry in build_index(tmp_path / "run/research")["sessions"] if entry["id"] == "research")
     assert session["candidates"][0]["file_count"] == 0
+
+
+def test_the_agents_container_needing_more_cpus_than_the_host_is_refused_unless_fewer_are_accepted(
+        tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    monkeypatch.setattr(harbor_deliverable.os, "cpu_count", lambda: 4)
+    task = harbor_task(tmp_path / "harbor-task", **{"task.toml": '[environment]\nworkdir = "/app"\ncpus = 8\n'})
+    with pytest.raises(ValueError, match="container asks for 8 CPUs and this machine has 4.*cpus = 4"):
+        harbor_deliverable.researcher_environment(task, tmp_path / "refused")
+    derived = harbor_deliverable.researcher_environment(task, tmp_path / "accepted", cpus=4)
+    assert launch.harbor_environment.load(derived).config["cpus"] == 4
+
+
+def test_json_output_is_one_document_even_when_harbor_prints(tmp_path, monkeypatch, capsys):
+    from autoresearch_infrastructure import cli
+
+    def noisy(run):
+        print("1/1 Mean: 0.000 progress from Harbor")
+        return {"status": "checked", "candidates": []}
+
+    monkeypatch.setattr(launch, "check_run", noisy)
+    task = tmp_path / "task"
+    shutil.copytree(EXAMPLE, task, ignore=shutil.ignore_patterns("__pycache__"))
+    assert cli.main(["check", str(task), "--config", str(task / "local.toml"), "--output", str(tmp_path / "run"),
+                     "--json"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["status"] == "checked" and "Mean" in captured.err

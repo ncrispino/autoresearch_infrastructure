@@ -697,7 +697,7 @@ def task(run):
 | `memory` | An `ari.Memory`, as in `ari.Task`. |
 | `capabilities`, `network`, `feedback_log` | Loosen the grader container: Linux capabilities to keep, the default Docker network, and publishing the feedback script's output to the researcher. All are off by default. |
 
-**The grader.** Each evaluation starts a new container from the grader image, with the task's `[environment]` CPUs and memory. A task asking for more CPUs than the machine has is refused when it opens, because a grader with time limits scores differently on fewer; `grader_cpus = N` under `[task]` accepts fewer, and each evaluation records the number used. It mounts the saved candidate read-only at `deliverable`, and the Harbor task's
+**The grader.** Each evaluation starts a new container from the grader image, with the task's `[environment]` CPUs and memory. A task asking for more CPUs than the machine has is refused when it opens, because a grader with time limits scores differently on fewer; `cpus = N` under `[task]` accepts fewer for the grader and the agents' container, and each evaluation records the number the grader used. It mounts the saved candidate read-only at `deliverable`, and the Harbor task's
 `tests/` read-only at `/tests` when the grader is the task's main image, then
 runs the feedback script. The script writes
 `/logs/verifier/reward.txt` (one number) or `reward.json` (a mapping), as for
