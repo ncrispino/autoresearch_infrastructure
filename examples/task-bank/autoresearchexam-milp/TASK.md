@@ -15,8 +15,8 @@ that the import had to handle:
 - Its grading limit is in the benchmark's compose file, not in `[verifier]`.
 - Its score depends on wall-clock time, so the number of CPUs changes it.
 
-The import was checked by grading, with no agent and no model. No researcher has run
-on it yet. See [What was observed](#what-was-observed).
+The import was checked by grading the shipped starter, with no agent and no model.
+No researcher has run on it. See [What was observed](#what-was-observed).
 
 ## Fetch the task
 
@@ -58,5 +58,28 @@ and every run checks that the seed still matches the image.
 
 ## What was observed
 
-Pending: the official grading of the shipped starter and of
-[reference-policy.py](reference-policy.py) has not finished.
+Grading only, no agent, on a 4-CPU machine with `cpus = 4` in the run settings:
+
+| Candidate | Feedback panel (`intermediate`) | Sealed panel (`final`) |
+| --- | --- | --- |
+| The shipped starter, which always branches on the first candidate | reward 0; 3,198 nodes, 35 of 80 runs charged the cap | reward 0; 5,977 nodes, 49 of 80 runs charged the cap |
+
+All three of the grader's own tests passed on both panels: the deliverable
+contract, the graded panel and the reward bounds. The grader dropped each solve
+to uid 1001 inside ARI's container as it does in the benchmark's. Grading took
+14 and 17 minutes for the two panels.
+
+These numbers are not comparable with the benchmark's. The grader runs 8 solves
+at once, each with a 120-second wall-clock cap that counts toward the score, and
+it was built for 8 CPUs. On 4, most runs that hit the cap hit it for time, not for
+nodes: one hard instance alone took 114 seconds for 3,759 decisions. That is why
+ARI refuses to grade a task on fewer CPUs than it asks for unless the settings
+say so.
+
+The grading of [reference-policy.py](reference-policy.py), "most fractional", was
+interrupted twice when the machine restarted, and has not been run to the end. On
+the task's own practice instances it needed fewer nodes than the starter (a
+geometric mean of 3,058 against 4,203 on eight instances), but both are well
+above the task's trivial floor of about 400, so on this machine it would also
+score 0. ARI recorded each interrupted evaluation as incomplete, with no score,
+and now removes the grader container an interrupted process leaves behind.
