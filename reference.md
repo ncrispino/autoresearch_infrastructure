@@ -702,7 +702,7 @@ def task(run):
 runs the feedback script. The script writes
 `/logs/verifier/reward.txt` (one number) or `reward.json` (a mapping), as for
 Harbor's verifier. Then the sealed script runs the same way in a second
-container. Both containers are deleted with everything they wrote. They have no
+container. Both containers are deleted with everything they wrote. If the process dies first, as when the machine restarts, the next process to grade the run removes what it left: every grader container carries a label naming its run. The interrupted evaluation is recorded as incomplete, with no score. They have no
 network and no capabilities unless you add them, a memory and CPU limit from
 `task.toml`, and the time limit of `[verifier] timeout_sec`. A script that
 writes no reward leaves the evaluation unfinished. The image is built once, on

@@ -468,7 +468,7 @@ def test_a_seed_that_differs_from_what_the_image_ships_is_named_file_by_file(tmp
     shipped_files = tmp_path / "image-files"
     materialize(shipped_files, {"model.json": '{"threshold": 0.2}\n', "notes/readme.txt": "kept\n"})
 
-    def fake_shipped(image, path, destination):
+    def fake_shipped(image, path, destination, **_):
         shutil.copytree(shipped_files, destination)
         return destination
 
@@ -558,7 +558,7 @@ def test_an_empty_seed_is_described_as_empty():
 def test_a_separate_grader_image_keeps_its_own_tests_directory_and_its_scripts_are_checked_inside_it(
         tmp_path, monkeypatch):
     probed = []
-    monkeypatch.setattr(harbor_deliverable, "_has_file", lambda image, path: probed.append(path.as_posix())
+    monkeypatch.setattr(harbor_deliverable, "_has_file", lambda image, path, **_: probed.append(path.as_posix())
                         or path.as_posix() != "/tests/missing.sh")
     monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
     pinned = "sha256:" + "e" * 64
@@ -586,13 +586,13 @@ def test_a_separate_grader_image_keeps_its_own_tests_directory_and_its_scripts_a
 def test_the_seed_is_read_from_the_agent_ready_image_when_the_settings_name_one(tmp_path, monkeypatch):
     read = []
 
-    def fake_shipped(image, path, destination):
+    def fake_shipped(image, path, destination, **_):
         read.append(image)
         destination.mkdir()
         return destination
 
     monkeypatch.setattr(harbor_deliverable, "shipped", fake_shipped)
-    monkeypatch.setattr(harbor_deliverable, "_has_file", lambda image, path: True)
+    monkeypatch.setattr(harbor_deliverable, "_has_file", lambda image, path, **_: True)
     monkeypatch.setattr(HarborGraderEvaluator, "image", lambda self: "sha256:" + "c" * 64)
     agents = "sha256:" + "f" * 64
     (tmp_path / "seed").mkdir()
@@ -789,3 +789,45 @@ def test_a_script_past_its_timeout_leaves_the_evaluation_unfinished_and_no_conta
     with pytest.raises(RuntimeError, match="ran past 2 seconds"):
         grader.grade(tmp_path / "candidate", "feedback", tmp_path / "evidence")
     assert subprocess.run(["docker", "ps", "-aq"], capture_output=True, text=True).stdout == before
+
+
+@docker
+def test_containers_left_by_a_grader_process_that_died_are_removed_before_the_next_grading(tmp_path):
+    task = harbor_task(tmp_path / "harbor-task")
+    grader = evaluator(tmp_path, task=task, sealed=None)
+    image = grader.image()
+    other = evaluator(tmp_path / "another-run", task=task, sealed=None)
+    assert grader.label != other.label  # each run has its own label
+
+    def make(label):
+        return subprocess.run(["docker", "create", "--label", label, image, "true"], capture_output=True,
+                              text=True, check=True).stdout.strip()
+
+    leftover, unrelated = make(grader.label), make(other.label)
+    try:
+        grader.prepare()
+        listed = subprocess.run(["docker", "ps", "--all", "--quiet", "--no-trunc"], capture_output=True,
+                                text=True).stdout.split()
+        assert leftover not in listed and unrelated in listed
+        again = make(grader.label)
+        grader.prepare()  # only once per process: a container this process made is never swept
+        assert again in subprocess.run(["docker", "ps", "--all", "--quiet", "--no-trunc"], capture_output=True,
+                                       text=True).stdout.split()
+        subprocess.run(["docker", "rm", "--force", again], capture_output=True)
+        (tmp_path / "candidate").mkdir()
+        (tmp_path / "candidate/answer.txt").write_text("x\n")
+        assert grader.grade(tmp_path / "candidate", "feedback", tmp_path / "evidence") == {"reward": 0.25}
+        assert not subprocess.run(["docker", "ps", "--all", "--quiet", "--filter", f"label={grader.label}"],
+                                  capture_output=True, text=True).stdout.split()
+    finally:
+        subprocess.run(["docker", "rm", "--force", leftover, unrelated], capture_output=True)
+
+
+def test_the_sweep_is_skipped_where_there_is_no_docker(tmp_path, monkeypatch):
+    def missing(*arguments, **options):
+        raise FileNotFoundError("docker")
+
+    grader = evaluator(tmp_path)
+    monkeypatch.setattr(harbor_deliverable.subprocess, "run", missing)
+    grader._sweep()  # does not raise; the image build is what reports the missing docker
+    assert grader._swept is False

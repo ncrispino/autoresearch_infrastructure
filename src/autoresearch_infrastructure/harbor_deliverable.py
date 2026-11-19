@@ -33,6 +33,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import tomllib
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
@@ -218,6 +219,10 @@ class HarborGraderEvaluator:
             if any(not isinstance(key, str) or not key for key in self.rewards.values()):
                 raise ValueError("rewards maps each Metric to a reward key")
         self.record = Path(state) / "grader.json"
+        # Every container this grader creates carries this label, so one left by a process that died
+        # can be found and removed. Only one process writes a run at a time.
+        self.label = "ari.grader=" + hashlib.sha256(str(self.record.resolve()).encode()).hexdigest()[:16]
+        self._swept, self._sweep_lock = False, threading.Lock()
         self.definition = digest({
             "task.toml": manifest.read_text(encoding="utf-8"),
             "tests": task_context_digest(self.task / "tests") if (self.task / "tests").is_dir() else None,
@@ -277,6 +282,28 @@ class HarborGraderEvaluator:
         write_json(self.record, {"definition": self.definition, "image": image, "built": built})
         return image
 
+    def _sweep(self) -> None:
+        """Once per process, remove containers this run's grader left behind when its process died.
+
+        A grader container is removed when its script ends, unless the whole
+        process stops first, as when the machine restarts. The run's writer lock
+        means no other process grades this run, and the sweep happens before
+        this process starts any container, so every container with the label is
+        such a leftover.
+        """
+        with self._sweep_lock:
+            if self._swept:
+                return
+            try:
+                listed = subprocess.run(["docker", "ps", "--all", "--quiet", "--filter", f"label={self.label}"],
+                                        capture_output=True, text=True)
+            except OSError:
+                return  # no docker here: building or grading reports that itself
+            leftovers = listed.stdout.split() if listed.returncode == 0 else []
+            if leftovers:
+                subprocess.run(["docker", "rm", "--force", "--volumes", *leftovers], capture_output=True)
+            self._swept = True
+
     def prepare(self) -> None:
         """Build the grader image, and check once that the seed is what the task's image ships.
 
@@ -286,10 +313,12 @@ class HarborGraderEvaluator:
         this a different task. Called before the baseline, and again before
         each evaluation, where it costs nothing once the check is recorded.
         """
+        self._sweep()
         image = self.image()
         saved = json.loads(self.record.read_text())
         if self.separate_grader and not saved.get("scripts_checked"):
-            missing = [path.as_posix() for path in self.scripts.values() if not _has_file(image, path)]
+            missing = [path.as_posix() for path in self.scripts.values()
+                       if not _has_file(image, path, label=self.label)]
             if missing:
                 raise ValueError(f"The grader image has no {', '.join(missing)}. A separate grader image is used "
                                  "as it is, so name the scripts by their paths inside it")
@@ -307,7 +336,7 @@ class HarborGraderEvaluator:
         else:
             main = image
         with tempfile.TemporaryDirectory(prefix="ari-shipped-") as scratch:
-            found = shipped(main, self.deliverable, Path(scratch) / "shipped")
+            found = shipped(main, self.deliverable, Path(scratch) / "shipped", label=self.label)
             differences = _differences(_file_digests(found) if found else {}, expected)
         if differences:
             shown = "; ".join(differences[:8]) + (f"; and {len(differences) - 8} more" if len(differences) > 8 else "")
@@ -325,7 +354,8 @@ class HarborGraderEvaluator:
         image = self.image()
         name = "ari-grader-" + uuid4().hex[:12]
         command = [
-            "create", "--name", name, "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+            "create", "--name", name, "--label", self.label,
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             "--pids-limit", "512", "--init",
             "--cpus", f"{self.cpus:g}",
             "--memory", f"{self.environment.get('memory_mb', 4096)}m",
@@ -439,14 +469,14 @@ def _main_image(task: Path, environment: dict) -> tuple[str | None, Path | None]
     return None, task / "environment"
 
 
-def shipped(image: str, path: PurePosixPath, destination: Path) -> Path | None:
+def shipped(image: str, path: PurePosixPath, destination: Path, *, label: str | None = None) -> Path | None:
     """Copy what ``image`` holds at ``path`` into ``destination``; None when the image has nothing there.
 
     The image is never run: a container is created, copied from and removed.
     Links and special files are dropped from the copy.
     """
     name = "ari-shipped-" + uuid4().hex[:12]
-    _docker(["create", "--name", name, "--entrypoint", "sh", image])
+    _docker(["create", "--name", name, *(["--label", label] if label else []), "--entrypoint", "sh", image])
     try:
         copied = subprocess.run(["docker", "cp", f"{name}:{path}/.", str(destination)],
                                 capture_output=True, text=True)
@@ -460,11 +490,11 @@ def shipped(image: str, path: PurePosixPath, destination: Path) -> Path | None:
     return destination
 
 
-def _has_file(image: str, path: PurePosixPath) -> bool:
+def _has_file(image: str, path: PurePosixPath, *, label: str | None = None) -> bool:
     """Whether ``image`` holds a regular file at ``path``. The image is never run."""
     with tempfile.TemporaryDirectory(prefix="ari-probe-") as scratch:
         name = "ari-probe-" + uuid4().hex[:12]
-        _docker(["create", "--name", name, "--entrypoint", "sh", image])
+        _docker(["create", "--name", name, *(["--label", label] if label else []), "--entrypoint", "sh", image])
         try:
             copied = subprocess.run(["docker", "cp", f"{name}:{path}", str(Path(scratch) / "file")],
                                     capture_output=True)
