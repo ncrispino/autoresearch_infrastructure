@@ -884,3 +884,14 @@ def test_json_output_is_one_document_even_when_harbor_prints(tmp_path, monkeypat
                      "--json"]) == 0
     captured = capsys.readouterr()
     assert json.loads(captured.out)["status"] == "checked" and "Mean" in captured.err
+
+
+def test_a_missing_image_id_is_reported_as_missing_not_pulled(monkeypatch):
+    calls = []
+    monkeypatch.setattr(harbor_deliverable, "_image_present", lambda image: False)
+    monkeypatch.setattr(harbor_deliverable, "_docker", lambda arguments: calls.append(arguments))
+    with pytest.raises(ValueError, match="not on this machine, and an image ID cannot be pulled"):
+        harbor_deliverable._resolve("sha256:" + "a" * 64, None)
+    assert calls == []
+    harbor_deliverable._resolve("registry.example/grader@sha256:" + "a" * 64, None)
+    assert calls == [["pull", "--quiet", "registry.example/grader@sha256:" + "a" * 64]]

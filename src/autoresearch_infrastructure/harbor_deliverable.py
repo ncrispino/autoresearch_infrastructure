@@ -446,6 +446,9 @@ def _resolve(image: str | None, context: Path | None) -> tuple[str, bool]:
     """A pinned image, pulled if absent, or the image built from ``context``; and whether it was built."""
     if context is None:
         if not _image_present(image):
+            if "@" not in image:  # a bare image ID names a local image; no registry can supply it
+                raise ValueError(f"The image {image} is not on this machine, and an image ID cannot be pulled. "
+                                 "Build or load it again, or name it as repository@sha256:...")
             _docker(["pull", "--quiet", image])
         return image, False
     with tempfile.TemporaryDirectory(prefix="ari-grader-build-") as scratch:
