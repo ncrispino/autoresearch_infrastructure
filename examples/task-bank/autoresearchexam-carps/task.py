@@ -22,10 +22,6 @@ def task(run):
         sealed="/tests/test.sh",
         # The grader's own image, built from this directory. [task] grader_image names a prebuilt one.
         grader="environment/are-grader-ctx",
-        # The root defaults the benchmark's grader runs with, without the network ones. It runs each call
-        # as uid 1001 and kills a hung call's processes (KILL). SYS_ADMIN, which the benchmark's server needs
-        # for `unshare -n`, is not needed: the grader container has no network.
-        capabilities=["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID", "SETPCAP", "AUDIT_WRITE"],
         # instruction.md divided into the objective, named rules and named environment notes, with
         # every change recorded: see instruction-split.toml and TASK.md.
         split="instruction-split.toml",

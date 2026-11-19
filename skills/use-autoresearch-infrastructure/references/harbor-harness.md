@@ -67,10 +67,13 @@ reads that service's ledger. ARI replaces the service, so name the scripts
 inside the grader image that do the scoring, and pass `grader=` the directory
 the image is built from. A separate grader image is used as it is: its own
 `/tests` is not replaced by the task's `tests/`, and the scripts are checked to
-exist in it before the baseline. Read the grader to find what it needs from its
-container: a grader that runs the deliverable as another user needs
-`capabilities=["CHOWN", "SETUID", "SETGID"]`, and one that isolates itself with
-`unshare` may not need `SYS_ADMIN`, since ARI's grader has no network.
+exist in it before the baseline. The grader keeps Docker's default
+capabilities, as it would running as root in an ordinary container, so a grader
+that changes owners or runs the deliverable as another user needs nothing more.
+Pass `capabilities=` a list only to change that: `[]` for none, or a set with
+`SYS_ADMIN` for a grader that sandboxes the deliverable itself. One that
+isolates itself with `unshare -n` may not need it, since ARI's grader has no
+network.
 [AutoResearchExam subset selection](../../../examples/task-bank/autoresearchexam-carps/TASK.md)
 is a worked import, with a table from each part of the source to `task.py`.
 

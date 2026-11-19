@@ -28,9 +28,6 @@ def task(run):
         feedback="/tests/intermediate.sh",
         sealed="/tests/test.sh",
         grader="environment/are-grader-ctx",
-        # The root defaults the benchmark's grader runs with, without the network ones. It drops each solve
-        # to uid 1001 with setgroups, setgid and setuid, and kills a hung solve's processes (KILL).
-        capabilities=["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID", "SETPCAP", "AUDIT_WRITE"],
         # The benchmark's grading service allows 2700 seconds a grade (ARE_GRADE_TIMEOUT_SEC in its
         # compose file); its [verifier] timeout_sec belongs to the step that reads its own ledger.
         timeout=2700,

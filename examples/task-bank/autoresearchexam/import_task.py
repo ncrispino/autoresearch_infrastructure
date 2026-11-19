@@ -19,8 +19,9 @@ Everything is read from the task's own files; nothing in the task is run:
 - the grader as ``environment/are-grader-ctx``, whose Dockerfile copies both
   scripts and both hidden splits into the image's ``/tests``: ``intermediate.sh``
   is the feedback script and ``test.sh`` the sealed one;
-- the grader's capabilities, the root defaults it was written against (see
-  ``CAPABILITIES``).
+- nothing about the grader's capabilities: ARI's default, Docker's own set, is
+  what the benchmark's graders run with as root, and they use it to chown each
+  call's directory, drop to the agent's uid and kill its processes.
 
 The written ``task.py`` has no rules: the tasks state none that a reviewer could
 judge, so ``local.toml`` turns review off. Add rules before a run with a
@@ -43,11 +44,6 @@ import yaml
 
 GRADER = "environment/are-grader-ctx"
 FEEDBACK, SEALED = "intermediate.sh", "test.sh"
-# The benchmark runs its graders as root with Docker's default capabilities, and they use them: they chown
-# each call's directory to the agent's uid and then chmod it (FOWNER), drop to that uid (SETUID, SETGID), and
-# kill its processes (KILL). These are those defaults without the network ones; ARI's grader has no network.
-# The candidate itself runs as the agent's uid, without them.
-CAPABILITIES = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID", "SETPCAP", "AUDIT_WRITE"]
 
 TASK_PY = '''"""AutoResearchExam's {name}, imported without editing the task.
 
@@ -69,7 +65,6 @@ def task(run):
         feedback="/tests/{feedback}",            # the intermediate split
         sealed="/tests/{sealed}",                # the final split
         grader="{grader}",
-        capabilities={capabilities!r},
         timeout={timeout},                       # ARE_GRADE_TIMEOUT_SEC
         rules=RULES,
         memory=ari.Memory(conversation_mode="continue", conversations="all"),
@@ -108,7 +103,7 @@ def write(source: Path, destination: Path, found: dict) -> None:
     shutil.copytree(source, destination / "harbor-task", symlinks=True)
     (destination / "task.py").write_text(TASK_PY.format(
         name=source.name, deliverable=found["deliverable"], feedback=FEEDBACK, sealed=SEALED, grader=GRADER,
-        capabilities=CAPABILITIES, timeout=found["timeout"]), encoding="utf-8")
+        timeout=found["timeout"]), encoding="utf-8")
     host = os.cpu_count() or 1
     fewer = (f"cpus = {host}                  # this machine has {host}; the task asks for {found['cpus']}\n"
              if found["cpus"] > host else "")

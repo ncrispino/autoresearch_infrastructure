@@ -126,9 +126,7 @@ def test_names_must_be_complete_unique_and_plain():
         ari.Instructions("Goal", rules=("A",), rule_names=("Time Budget",))
 
 
-def test_a_deliverable_task_with_a_split_records_it_and_takes_the_tasks_time_limit(tmp_path):
-    pytest.importorskip("harbor")
-    from autoresearch_infrastructure import launch
+def deliverable_task(tmp_path):
     from autoresearch_infrastructure.source_tree import materialize
 
     materialize(tmp_path / "task", {
@@ -146,6 +144,13 @@ def test_a_deliverable_task_with_a_split_records_it_and_takes_the_tasks_time_lim
     })
     write(tmp_path / "task", FULL)
     (tmp_path / "task/instruction.md").unlink()  # the split reads the Harbor task's own instruction
+
+
+def test_a_deliverable_task_with_a_split_records_it_and_takes_the_tasks_time_limit(tmp_path):
+    pytest.importorskip("harbor")
+    from autoresearch_infrastructure import launch
+
+    deliverable_task(tmp_path)
     run = launch.open_run(tmp_path / "task", tmp_path / "task/settings.toml", tmp_path / "run",
                           "sha256:" + "a" * 64)
     plan = json.loads((tmp_path / "run/plan.json").read_text())
@@ -153,7 +158,65 @@ def test_a_deliverable_task_with_a_split_records_it_and_takes_the_tasks_time_lim
     assert plan["inputs"]["instruction_split"]["parts"][1]["tag"] == "verbatim"
     assert plan["inputs"]["researcher_timeout"] == 7200.0
     assert run.inputs.named_environment["ari_budget"] == (
-        "This session may run for up to 2 hours, and the run allows up to 3 proposals in all.")
+        "You have up to 2 hours in this session. A session started after this one ends gets the same time "
+        "again. Across the whole run, up to 3 proposals can be submitted and scored.")
+    # A split drops what ARI replaces, so the submission note overrides nothing.
+    assert run.inputs.named_environment["ari_submission"] == (
+        "Submit each candidate with the `record_candidate` tool, described below. The time and the number of "
+        "proposals this run allows are given in the last note.")
+    assert list(run.inputs.named_environment)[-1] == "ari_budget"
     assert "examples" in run.inputs.named_environment and "ari_submission" in run.inputs.named_environment
     assert "24 hours" not in plan["instructions"]  # dropped, and the settings' budget stated instead
     assert Path(tmp_path / "task/split.toml").is_file()
+
+
+def test_describe_shows_each_part_as_a_hunk_with_its_reason(tmp_path):
+    _, record = instruction_split.load(*write(tmp_path, FULL))
+    shown = instruction_split.describe(record)
+    assert shown.startswith("split.toml: 11 parts: 4 verbatim, 3 adapted, 1 added, 3 dropped\n")
+    assert ("@@ rule time_budget (adapted)\n- `select` must return within it.\n"
+            "+ Do not let `select` run past `budget`.\n  # Made a prohibition.\n"
+            "  # enforced: The grader kills a slow call.") in shown
+    assert "@@ dropped\n- # Pick points\n  # The title." in shown
+    assert "@@ rule no_lookup (added)\n+ Do not return answers" in shown
+    assert "@@ objective (verbatim)\n  `seed`: int." in shown
+    changes = instruction_split.describe(record, changes_only=True)
+    assert "(verbatim)" not in changes and "@@ rule seeded (adapted)" in changes
+
+
+def test_ari_instructions_reads_a_task_or_a_run(tmp_path, capsys):
+    pytest.importorskip("harbor")
+    from autoresearch_infrastructure import launch
+    from autoresearch_infrastructure.cli import main
+
+    deliverable_task(tmp_path)
+    task, settings = tmp_path / "task", tmp_path / "task/settings.toml"
+    assert main(["instructions", str(task), "--config", str(settings), "--image", "sha256:" + "a" * 64,
+                 "--changes"]) == 0
+    from_task = capsys.readouterr().out
+    assert "@@ rule time_budget (adapted)" in from_task and "(verbatim)" not in from_task
+    assert not list(tmp_path.glob("run*"))  # opening the task left nothing behind
+    launch.open_run(task, settings, tmp_path / "run", "sha256:" + "a" * 64).research.close()
+    assert main(["instructions", str(tmp_path / "run"), "--changes"]) == 0
+    assert capsys.readouterr().out == from_task
+    assert main(["instructions", str(tmp_path / "run"), "--rendered"]) == 0
+    assert "Do not let `select` run past `budget`." in capsys.readouterr().out
+
+
+def test_without_a_split_the_submission_note_overrides_only_the_session_and_the_budget_counts_evaluations(
+        tmp_path):
+    pytest.importorskip("harbor")
+    from autoresearch_infrastructure import launch
+
+    deliverable_task(tmp_path)
+    task = tmp_path / "task"
+    (task / "task.py").write_text((task / "task.py").read_text().replace(", split='split.toml'", ""))
+    settings = task / "settings.toml"
+    settings.write_text(settings.read_text().replace("candidates = 4\n", "candidates = 4\nevaluations = 3\n"))
+    run = launch.open_run(task, settings, tmp_path / "run", "sha256:" + "a" * 64)
+    notes = run.inputs.named_environment
+    assert notes["ari_submission"].endswith(
+        "If the text above names its own submission tool, a time limit for your whole session or a number of "
+        "submissions, these replace them. A limit that grading applies to the deliverable itself still holds.")
+    # Three evaluations: the baseline's and two more, though the candidate limit would allow three proposals.
+    assert notes["ari_budget"].endswith("up to 2 proposals can be submitted and scored.")

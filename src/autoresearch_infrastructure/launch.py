@@ -282,6 +282,9 @@ class _Opening:
                 "researcher_timeout": task.researcher_timeout,
             },
             "review_environment": environment_identity("review-environment"),
+            # What the evaluator says it is, when it says so plainly, such as a Harbor grader's
+            # scripts and capabilities. Its code identity is in the experiment's contract either way.
+            "evaluator": _evaluator_identity(task.evaluator),
         })
         if self.saved is not None and self.saved != plan:
             _discard(staged)
@@ -353,6 +356,11 @@ def _place(output: Path, staged: dict, digests: dict) -> None:
         else:
             final.parent.mkdir(parents=True, exist_ok=True)
             path.rename(final)
+
+
+def _evaluator_identity(evaluator) -> dict | None:
+    identity = getattr(evaluator, "identity", None)
+    return identity if isinstance(identity, dict) else None
 
 
 def _evaluation_plan(plan: dict) -> dict:

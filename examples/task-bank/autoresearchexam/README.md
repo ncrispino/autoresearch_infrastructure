@@ -18,7 +18,7 @@ from the task's own files; nothing in the task is run:
 | `timeout` | `ARE_GRADE_TIMEOUT_SEC` there. The task's `[verifier] timeout_sec` belongs to the benchmark's ledger-reading step. |
 | `grader` | `environment/are-grader-ctx`, whose Dockerfile copies both scripts and both hidden splits into the image's `/tests` |
 | `feedback`, `sealed` | `/tests/intermediate.sh` and `/tests/test.sh` in that image |
-| `capabilities` | Docker's default root capabilities without the network ones: `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `KILL`, `SETGID`, `SETUID`, `SETPCAP`, `AUDIT_WRITE`. The benchmark runs its graders with them, and they use them: a grader `chown`s each call's directory to the agent's uid and then `chmod`s it, which needs `FOWNER`, and kills the agent's processes, which needs `KILL`. The candidate runs as the agent's uid, without them. |
+| `capabilities` | Not written: ARI's default is Docker's default set, which the benchmark runs its graders with as root. They use it: a grader `chown`s each call's directory to the agent's uid and then `chmod`s it, which needs `FOWNER`, and kills the agent's processes, which needs `KILL`. The candidate runs as the agent's uid, without them. |
 
 It writes no rules, because the tasks state none that a reviewer could judge, so
 `local.toml` turns review off. Add rules to `task.py` before a run with a reviewer.
@@ -107,5 +107,9 @@ Codex gives an MCP tool call 300 seconds, and this task's review and grading too
 about 9 minutes, so `record_candidate` timed out on the client side while ARI went on
 to record and grade the candidate. The agent, as the instructions say, did not
 resubmit and ended the session; the next start continued from the recorded
-candidate, so no proposal was lost. A task whose grading takes over 5 minutes needs
-a longer tool timeout in the agent for one session to make every proposal.
+candidate, so no proposal was lost.
+
+ARI now gives Codex's submission tool a timeout as long as the researcher's
+session. cpu-llm-decode-throughput was run again the same way: one researcher start
+made both proposals, with no call timed out. Feedback 0 → 0.107 → 0.116, sealed
+0 → 0.100 → 0.113, in 44 minutes for $0.099 of model cost.

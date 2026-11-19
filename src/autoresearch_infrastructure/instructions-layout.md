@@ -12,6 +12,6 @@ $rules
 
 ### Environment
 
-These hold whatever you do.
+Facts about where you work and how grading runs. Nothing you do changes them.
 
 $environment
