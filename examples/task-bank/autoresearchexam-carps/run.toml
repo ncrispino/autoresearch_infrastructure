@@ -6,7 +6,7 @@ evaluations = 41
 [researcher]
 name = "terminus-2"
 model_name = "anthropic/claude-opus-5-5"
-override_timeout_sec = 86400
+# Its timeout is the task's own [agent] timeout_sec, 86400. override_timeout_sec here would replace it.
 [researcher.kwargs]
 record_terminal_session = false
 

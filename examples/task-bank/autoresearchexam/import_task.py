@@ -18,7 +18,9 @@ Everything is read from the task's own files; nothing in the task is run:
   submission ledger;
 - the grader as ``environment/are-grader-ctx``, whose Dockerfile copies both
   scripts and both hidden splits into the image's ``/tests``: ``intermediate.sh``
-  is the feedback script and ``test.sh`` the sealed one.
+  is the feedback script and ``test.sh`` the sealed one;
+- the grader's capabilities, the root defaults it was written against (see
+  ``CAPABILITIES``).
 
 The written ``task.py`` has no rules: the tasks state none that a reviewer could
 judge, so ``local.toml`` turns review off. Add rules before a run with a
@@ -41,8 +43,11 @@ import yaml
 
 GRADER = "environment/are-grader-ctx"
 FEEDBACK, SEALED = "intermediate.sh", "test.sh"
-# Every CPU task's grader drops to the agent's uid with runuser, setuid or chown.
-CAPABILITIES = ["CHOWN", "SETUID", "SETGID"]
+# The benchmark runs its graders as root with Docker's default capabilities, and they use them: they chown
+# each call's directory to the agent's uid and then chmod it (FOWNER), drop to that uid (SETUID, SETGID), and
+# kill its processes (KILL). These are those defaults without the network ones; ARI's grader has no network.
+# The candidate itself runs as the agent's uid, without them.
+CAPABILITIES = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID", "SETPCAP", "AUDIT_WRITE"]
 
 TASK_PY = '''"""AutoResearchExam's {name}, imported without editing the task.
 

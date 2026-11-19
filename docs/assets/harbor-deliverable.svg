@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1152" height="744" viewBox="0 0 1152 744" role="img" aria-labelledby="title description">
   <title id="title">A Harbor task as an ARI task: the files you set up and where each one is used</title>
-  <desc id="description">On the left, the task directory: task.py, run.toml and an unchanged Harbor task directory holding instruction.md, task.toml, environment/ with its Dockerfile and candidate/, tests/ with feedback.sh and test.sh, and solution/. On the right, what runs. The researcher is a Harbor agent in a container built from environment/ alone; it edits /workspace/candidate/, which starts as the task's environment/candidate/, and reads instruction.md and your rules as its objective. It submits with record_candidate to the ARI controller, which saves the candidate, has the reviewer judge each rule, and starts the grader. The grader is a new container for every submission, started by ARI and not by Harbor's verifier; the saved candidate is mounted read-only at /workspace/candidate and tests/ at /tests. The feedback script's reward goes back to the researcher and ranks candidates. The sealed script's reward goes only to private evidence. task.py names what a Harbor task leaves out: the two scripts and the rules. The deliverable is /workspace/candidate by convention.</desc>
+  <desc id="description">On the left, the task directory: task.py, run.toml and an unchanged Harbor task directory holding instruction.md, task.toml, environment/ with its Dockerfile and candidate/, tests/ with feedback.sh and test.sh, and solution/. On the right, what runs. The researcher is a Harbor agent in a container built from environment/ alone; it edits /workspace/candidate/, which starts as the task's environment/candidate/, and reads instruction.md and your rules as its objective. It submits with record_candidate to the ARI controller, which saves the candidate, has the reviewer judge each rule, and starts the grader. The grader is a new container for every submission, started by ARI and not by Harbor's verifier; the saved candidate is mounted read-only at /workspace/candidate and tests/ at /tests. The feedback script's reward goes back to the researcher and ranks candidates. The sealed script's reward goes only to private evidence. task.py names what a Harbor task leaves out: the two scripts and the rules. The deliverable is /workspace/candidate by convention, or the task's own path such as /app/output, where the researcher then sees it instead.</desc>
   <style>
     :root { --bg: #f5f7fa; --panel: #fff; --ink: #172a40; --muted: #52677e; --line: #cfd8e3; --accent: #275ed2; --tint: #eaf0ff; --code: #e9eef4; }
     @media (prefers-color-scheme: dark) {
@@ -60,8 +60,9 @@
       <tspan x="84" y="611">rules=["...", "..."],</tspan>
       <tspan x="64" y="630">)</tspan>
     </text>
-    <text x="52" y="672" class="note">A Harbor task has one test script and no list of rules.</text>
-    <text x="52" y="692" class="note">The deliverable is /workspace/candidate by convention.</text>
+    <text x="52" y="664" class="note">A Harbor task has one test script and no list of rules.</text>
+    <text x="52" y="682" class="note">The deliverable is /workspace/candidate by convention,</text>
+    <text x="52" y="700" class="note">or the task&apos;s own path, such as /app/output.</text>
   </g>
 
   <!-- From the files to what runs -->

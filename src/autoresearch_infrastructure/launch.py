@@ -26,7 +26,7 @@ from .instructions import task_facts
 from .ledger import StartLedger
 from .persistence import digest, remove_tree, sha256_file, write_json
 from .research import BASELINE, Research
-from .search import RESEARCHER_PROTOCOL, propose, researcher_starts, reset_candidate
+from .search import RESEARCHER_PROTOCOL, candidate_path, propose, researcher_starts, reset_candidate
 from .source_tree import python_tree_hash, snapshot, task_context_digest
 from .task import Run, RunSettings, Task, load_task
 
@@ -276,6 +276,10 @@ class _Opening:
                 "presenter": _identity(task.presenter) or "default",
                 "transforms": [code_identity(transform) for transform in task.transforms],
                 "original_instructions": original.specification() if task.transforms else None,
+                "rule_names": list(inputs.named_rules),
+                "environment_names": list(inputs.named_environment),
+                "instruction_split": task.instruction_split,
+                "researcher_timeout": task.researcher_timeout,
             },
             "review_environment": environment_identity("review-environment"),
         })
@@ -475,7 +479,7 @@ def _validity(task: Task, inputs: ResearcherInputs, settings: RunSettings, image
         from .review import TASK_SPECIFICATION, LLMValidity
 
         # One check for each rule, so the verdict says which rule a candidate broke.
-        rules = {f"rule_{number}": rule for number, rule in enumerate(inputs.rules, 1)}
+        rules = inputs.named_rules
         return LLMValidity(rules, agent=settings.reviewer, image=None if environment else image,
                            environment=environment, ledger=ledger,
                            context={TASK_SPECIFICATION: instructions}, precheck=task.validity)
@@ -541,7 +545,10 @@ def run_researchers(run: OpenRun) -> dict:
     where = {"image": run.image} if run.environment is None else {"environment": run.environment}
     if run.task.environment.candidate_at is not None:
         where["candidate_at"] = run.task.environment.candidate_at
-    agent = CodingAgent(agent=settings.researcher, **where)
+    # The task's own limit applies unless the settings give one.
+    researcher = {**settings.researcher, "override_timeout_sec": settings.researcher.get("override_timeout_sec")
+                  or run.task.researcher_timeout or 600}
+    agent = CodingAgent(agent=researcher, **where)
     inputs = run.inputs
     present_start = run.task.presenter or present
     repeats = settings.repeats
@@ -587,7 +594,7 @@ def run_researchers(run: OpenRun) -> dict:
                     research, agent, prompt, parent_id=parent, repeats=repeats, ledger=ledger,
                     context=run.context, history=history,
                     retain=inputs.environment.workspace == "keep",
-                    submissions=start.submissions, advance=advance,
+                    submissions=start.submissions, advance=advance, candidate=candidate_path(start),
                     record={**manifest, "presenter": _identity(run.task.presenter) or "default",
                             "environment": run.environment.prepared() if run.environment else None},
                 )})

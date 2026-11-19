@@ -51,7 +51,7 @@ and every run checks that the seed still matches the image.
 | The starter the image ships at `/app/submission` | `seed/`, from `ari extract-seed` | The candidate hides the image's files at that path, so the seed must be them. |
 | `environment/are-grader-ctx/Dockerfile` | `grader="environment/are-grader-ctx"` | The grader's own image, with the two sealed panels in its `/tests`. |
 | `/tests/intermediate.sh` and `/tests/test.sh` in that image | `feedback` and `sealed` | The `intermediate` and `final` panels, each 40 instances solved twice. |
-| The grader drops each solve to uid 1001 with `setgroups`, `setgid` and `setuid` | `capabilities=["SETUID", "SETGID"]` | Its solver import blocking is a Python import hook and audit hook, which needs no capabilities. `SYS_ADMIN` is only for the benchmark's server. |
+| The grader drops each solve to uid 1001 with `setgroups`, `setgid` and `setuid` | Docker's default root capabilities without the network ones | Its solver import blocking is a Python import hook and audit hook, which needs no capabilities. `SYS_ADMIN` is only for the benchmark's server. |
 | `ARE_GRADE_TIMEOUT_SEC: "2700"` in the compose file | `timeout=2700` | The grader has a 1900-second panel budget of its own. `[verifier] timeout_sec = 600` belongs to the benchmark's ledger-reading step and would cut grading short. |
 | `[agent]` allowlist: `api.openai.com`, `api.anthropic.com`, `grader` | Kept, without `grader` | As in the first import. |
 | Rules enforced by the grader, such as no MILP solver inside the policy | Two rules restating what a reviewer can judge | Marked as the importer's in `task.py`. |

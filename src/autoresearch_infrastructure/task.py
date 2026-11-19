@@ -84,6 +84,17 @@ class Task:
     ``review_environment``
         A Harbor task directory whose environment the reviewer runs in, instead
         of the ``--image`` (or ``--reviewer-image``) container.
+
+    Two more record what a task was built from:
+
+    ``researcher_timeout``
+        The task's own time limit for its agent, in seconds. The researcher
+        gets it unless ``[researcher]`` sets ``override_timeout_sec``; without
+        either, 600.
+    ``instruction_split``
+        The mapping from an imported instruction to these instructions, which
+        the run's plan records. ``ari.bases.harbor_deliverable`` fills it from a
+        split file.
     """
 
     objective: Metric | Objective
@@ -98,6 +109,8 @@ class Task:
     presenter: Callable | None = None
     transforms: tuple[Callable, ...] = ()
     review_environment: Path | str | None = None
+    researcher_timeout: float | None = None
+    instruction_split: dict | None = None
 
     def __post_init__(self):
         if isinstance(self.instructions, str):
@@ -216,7 +229,10 @@ def _agent(table, role: str) -> dict:
     researcher = role == "researcher"
     agent = native_agent_config(table, default_timeout=600 if researcher else 240, researcher=researcher,
                                 max_timeout=RESEARCHER_MAX_TIMEOUT if researcher else 7200)
-    return agent.model_dump(mode="json")
+    dumped = agent.model_dump(mode="json")
+    if researcher and "override_timeout_sec" not in table:
+        dumped["override_timeout_sec"] = None  # the task's own limit, or 600, decided when the run opens
+    return dumped
 
 
 class Run:

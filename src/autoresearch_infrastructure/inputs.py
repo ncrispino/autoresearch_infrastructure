@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .instructions import Instructions
+from .instructions import Instructions, check_names
 
 _HISTORY = ("all", "none")
 _CONVERSATION_MODES = ("files", "continue")
@@ -126,11 +126,12 @@ class Environment:
         next start. With ``"reset"``, nothing is exported and every start
         begins with only the parent candidate.
     ``candidate_at``
-        A second container path at which the researcher sees the candidate
-        directory, such as ``/app/output``. It is the same directory as
-        ``/workspace/candidate/``, not a copy. Use it when the files are
-        written to run from a fixed place, so that a relative path such as
-        ``../data`` means the same to the researcher as it does to the grader.
+        The container path at which the researcher sees the candidate
+        directory, such as ``/app/output``, in place of
+        ``/workspace/candidate/``. ``/workspace`` is then a scratch directory
+        that does not hold the candidate. Use it for a task that names its own
+        deliverable path, so its text is true as written and a relative path
+        such as ``../data`` means the same to the researcher as to the grader.
     """
 
     harbor: Path | str | None = None
@@ -167,6 +168,18 @@ class ResearcherInputs:
     environment: Environment = field(default_factory=Environment)
     memory: Memory = field(default_factory=Memory)
     title: str = ""
+    rule_names: tuple[str, ...] = ()
+    environment_names: tuple[str, ...] = ()
+
+    @property
+    def named_rules(self) -> dict[str, str]:
+        """Each rule by its stable name: the reviewer judges one check for each."""
+        return dict(zip(check_names("rules", self.rule_names, len(self.rules)), self.rules))
+
+    @property
+    def named_environment(self) -> dict[str, str]:
+        return dict(zip(check_names("environment", self.environment_names, len(self.environment_notes)),
+                        self.environment_notes))
 
     @classmethod
     def resolve(cls, instructions: Instructions, measured, *, environment=None, memory=None) -> ResearcherInputs:
@@ -179,6 +192,8 @@ class ResearcherInputs:
             environment=environment or Environment(),
             memory=memory or Memory(),
             title=instructions.title,
+            rule_names=instructions.rule_names,
+            environment_names=instructions.environment_names,
         )
 
     def specification(self) -> str:
@@ -196,7 +211,7 @@ class Start:
     mounted as files. ``submissions`` is how many candidates this session may
     record: one, a larger number, or ``None`` for no limit of its own.
     ``context`` says whether the task has context files, mounted at ``/context``.
-    ``candidate_at`` is a second path at which the candidate directory is mounted.
+    ``candidate_at`` is the path at which the candidate directory is mounted in place of ``/workspace/candidate``.
     """
 
     number: int

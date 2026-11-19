@@ -107,7 +107,9 @@ def test_default_inputs_keep_the_standard_prompt_and_record_each_start(example, 
                                          "conversation_mode": "files", "log": False, "summarize": None},
                               "environment": {"harbor": None, "workspace": "keep", "candidate_at": None},
                               "presenter": "default",
-                              "transforms": [], "original_instructions": None}
+                              "transforms": [], "original_instructions": None,
+                              "rule_names": ["rule_1"], "environment_names": [], "instruction_split": None,
+                              "researcher_timeout": None}
     assert plan["reviewer_image"] == IMAGE and plan["review_environment"] is None
     standard = plan["instructions"].rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(
         parent_id="candidate-0001", repeats=1, memory_rows="",
@@ -577,7 +579,7 @@ def test_transformation_helpers_check_their_arguments():
     assert transforms.add_environment_note("No network.")(inputs).environment_notes == ("No network.",)
     with pytest.raises(ValueError, match="no rule 3"):
         transforms.omit_rule(3)(inputs)
-    assert transforms.omit_rule(2).identity == {"transform": "omit_rule", "number": 2}
+    assert transforms.omit_rule(2).identity == {"transform": "omit_rule", "rule": 2}
 
 
 def test_an_unlimited_session_is_told_it_continues_without_a_null_count():
@@ -593,3 +595,9 @@ def test_an_unlimited_session_is_told_it_continues_without_a_null_count():
     assert reply["next"]["parent_id"] == "candidate-0002"
     assert "remaining_in_this_session" not in reply["next"] and None not in reply["next"].values()
     assert reply["next"]["note"].startswith("This session continues.")
+    assert "/workspace/candidate/ now holds" in reply["next"]["note"]
+    elsewhere = SubmissionRecorder(Research(), "candidate-0001", 1, limit=None, advance=lambda: "candidate-0002",
+                                   candidate="/app/output")
+    reply = elsewhere.dispatch_record_candidate("research", {
+        "candidate": "workspace", "proposal": {"hypothesis": "h", "mechanism": "m"}})
+    assert "/app/output/ now holds" in reply["next"]["note"] and "/workspace" not in reply["next"]["note"]
