@@ -17,7 +17,11 @@ import pytest
 
 import autoresearch_infrastructure as ari
 from autoresearch_infrastructure import harbor_deliverable, launch
-from autoresearch_infrastructure.harbor_deliverable import HarborGraderEvaluator, sealed_rewards
+from autoresearch_infrastructure.harbor_deliverable import (
+    DOCKER_DEFAULT,
+    HarborGraderEvaluator,
+    sealed_rewards,
+)
 from autoresearch_infrastructure.source_tree import materialize
 
 EXAMPLE = Path(__file__).parents[1] / "examples/threshold-deliverable"
@@ -74,10 +78,17 @@ def record(run, *models):
     ({"grader": "environment/absent"}, "Dockerfile"),
     ({"grader": "../elsewhere"}, "inside the Harbor task"),
     ({"capabilities": ["sys_admin; rm"]}, "capability names"),
+    ({"capabilities": "SYS_ADMIN"}, 'or "docker-default"'),
 ])
 def test_a_grader_that_cannot_keep_its_promises_is_refused_before_docker(tmp_path, options, message):
     with pytest.raises(ValueError, match=message):
         evaluator(tmp_path, **options)
+
+
+def test_the_grader_keeps_dockers_default_capabilities_unless_a_list_replaces_them(tmp_path):
+    assert evaluator(tmp_path / "default").capabilities == DOCKER_DEFAULT
+    assert evaluator(tmp_path / "none", capabilities=[]).capabilities == ()
+    assert evaluator(tmp_path / "admin", capabilities=["SYS_ADMIN"]).capabilities == ("SYS_ADMIN",)
 
 
 def test_feedback_is_the_public_score_and_the_sealed_score_stays_in_private_evidence(tmp_path, monkeypatch):
@@ -930,11 +941,14 @@ def test_the_autoresearchexam_importer_derives_task_py_from_the_tasks_own_files(
     monkeypatch.setattr(import_task.os, "cpu_count", lambda: 4)
     assert import_task.main([str(source), str(tmp_path / "imported")]) == 0
     written = (tmp_path / "imported/task.py").read_text()
-    for name in ("FOWNER", "KILL", "SETUID", "DAC_OVERRIDE"):  # the grader's root defaults, which it uses
-        assert f'"{name}"' in written or f"'{name}'" in written
+    assert "capabilities" not in written  # ARI's default is the benchmark's: Docker's own set
     assert "timeout=1800" in written and "deliverable='/app/output'" in written
     assert "cpus = 4" in (tmp_path / "imported/local.toml").read_text()
     (tmp_path / "imported/seed").mkdir()
     run = launch.open_run(tmp_path / "imported", tmp_path / "imported/local.toml", tmp_path / "run", None)
     assert run.task.evaluator.scripts["sealed"].as_posix() == "/tests/test.sh"
     assert run.task.evaluator.mount_tests is False  # the grader image keeps its own /tests
+    assert run.task.evaluator.capabilities == DOCKER_DEFAULT and len(DOCKER_DEFAULT) == 14
+    assert "SYS_ADMIN" not in DOCKER_DEFAULT
+    plan = json.loads((tmp_path / "run/plan.json").read_text())
+    assert plan["evaluator"]["capabilities"] == list(DOCKER_DEFAULT)  # recorded as the list used

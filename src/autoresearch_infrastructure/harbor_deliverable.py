@@ -71,6 +71,12 @@ def _inside(task: Path, name, label: str) -> Path:
     return task / relative
 
 
+# The capabilities Docker gives a container by default, as in Docker's own list (moby's
+# oci/caps/defaults.go). With no network, NET_RAW and NET_BIND_SERVICE do nothing for the grader.
+DOCKER_DEFAULT = ("AUDIT_WRITE", "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "MKNOD", "NET_BIND_SERVICE",
+                  "NET_RAW", "SETFCAP", "SETGID", "SETPCAP", "SETUID", "SYS_CHROOT")
+
+
 class HarborGraderEvaluator:
     """Run a Harbor task's grader script on one saved candidate.
 
@@ -102,8 +108,14 @@ class HarborGraderEvaluator:
         it, the feedback script must write exactly one reward, reported as
         ``REWARD``.
     ``capabilities``
-        Linux capabilities the grader container keeps, such as ``SYS_ADMIN``
-        for a grader that sandboxes the deliverable itself. The default is none.
+        Linux capabilities the grader container keeps. The default,
+        ``"docker-default"``, is Docker's own default set, ``DOCKER_DEFAULT``:
+        what a task's grader was written and tested with when it ran as root in
+        an ordinary container, such as changing a directory's owner or running
+        the deliverable as another user. Without a network, the two network
+        capabilities in it do nothing. A list replaces it: ``[]`` for none, or
+        a set with ``SYS_ADMIN`` for a grader that sandboxes the deliverable
+        itself. The plan records the list used.
     ``network``
         True gives the grader container the default Docker network. The default
         is no network.
@@ -144,8 +156,8 @@ class HarborGraderEvaluator:
     number used.
 
     Every evaluation gets a new grader container, which is deleted with
-    everything it wrote when the script ends. It has no capabilities beyond
-    those named, and the Docker socket and the run directory are never mounted.
+    everything it wrote when the script ends. It has Docker's default
+    capabilities unless ``capabilities`` says otherwise, and the Docker socket and the run directory are never mounted.
     The deliverable is the only thing it receives from the researcher, and it
     cannot change it. A grader that executes the deliverable does so inside
     this container, beside its own hidden data, so the rewards and an opted-in
@@ -154,7 +166,7 @@ class HarborGraderEvaluator:
 
     def __init__(self, *, task, deliverable: str, feedback: str, sealed: str | None = None,
                  grader: str | None = None, state: Path, rewards: dict[Metric, str] | None = None,
-                 capabilities=(), network: bool = False, feedback_log: bool = False,
+                 capabilities="docker-default", network: bool = False, feedback_log: bool = False,
                  feedback_artifacts: bool = False, seed: Path | None = None,
                  task_image: str | None = None, grader_image: str | None = None,
                  timeout: float | None = None, cpus: float | None = None):
@@ -207,7 +219,10 @@ class HarborGraderEvaluator:
         if type(self.timeout) not in (int, float) or not 0 < self.timeout <= 86400:
             raise ValueError("The grading timeout, timeout or [verifier] timeout_sec, must be positive and "
                              "at most 86400 seconds")
-        self.capabilities = tuple(capabilities)
+        self.capabilities = DOCKER_DEFAULT if capabilities == "docker-default" else (
+            () if isinstance(capabilities, str) else tuple(capabilities))
+        if isinstance(capabilities, str) and capabilities != "docker-default":
+            raise ValueError('capabilities is a list of Linux capability names, or "docker-default"')
         if any(not isinstance(name, str) or not re.fullmatch(r"[A-Z_]+", name) for name in self.capabilities):
             raise ValueError("capabilities are Linux capability names, such as SYS_ADMIN")
         if any(type(flag) is not bool for flag in (network, feedback_log, feedback_artifacts)):

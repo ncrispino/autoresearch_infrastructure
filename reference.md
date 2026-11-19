@@ -698,7 +698,8 @@ def task(run):
 | `feedback_artifacts` | `True` shows the researcher the files the feedback script writes under `/logs/artifacts`, such as a plot. Off, they stay in the private evidence. The sealed script's files are always private. |
 | `private` | More paths in the Harbor task to keep out of the agents' container. |
 | `memory` | An `ari.Memory`, as in `ari.Task`. |
-| `capabilities`, `network`, `feedback_log` | Loosen the grader container: Linux capabilities to keep, the default Docker network, and publishing the feedback script's output to the researcher. All are off by default. |
+| `capabilities` | The Linux capabilities the grader container keeps. The default, `"docker-default"`, is Docker's own default set: what a grader that ran as root in an ordinary container was written with. A list replaces it, `[]` for none. The plan records the list used, under `evaluator`. |
+| `network`, `feedback_log` | Loosen the grader container: the default Docker network, and publishing the feedback script's output to the researcher. Both are off by default. |
 
 **The grader.** Each evaluation starts a new container from the grader image, with the task's `[environment]` CPUs and memory. A task asking for more CPUs than the machine has is refused when it opens, because a grader with time limits scores differently on fewer; `cpus = N` under `[task]` accepts fewer for the grader and the agents' container, and each evaluation records the number the grader used. It mounts the saved candidate read-only at `deliverable`, and the Harbor task's
 `tests/` read-only at `/tests` when the grader is the task's main image, then
@@ -706,7 +707,7 @@ runs the feedback script. The script writes
 `/logs/verifier/reward.txt` (one number) or `reward.json` (a mapping), as for
 Harbor's verifier. Then the sealed script runs the same way in a second
 container. Both containers are deleted with everything they wrote. If the process dies first, as when the machine restarts, the next process to grade the run removes what it left: every grader container carries a label naming its run. The interrupted evaluation is recorded as incomplete, with no score. They have no
-network and no capabilities unless you add them, a memory and CPU limit from
+network, Docker's default capabilities unless `capabilities` says otherwise, a memory and CPU limit from
 `task.toml`, and the time limit of `[verifier] timeout_sec`. A script that
 writes no reward leaves the evaluation unfinished. The image is built once, on
 the first evaluation, and its ID is recorded in

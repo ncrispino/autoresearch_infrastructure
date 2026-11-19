@@ -62,7 +62,7 @@ def harbor_deliverable(
     task_environment: bool = True,
     private: tuple[str, ...] | list[str] = (),
     memory: Memory | None = None,
-    capabilities: tuple[str, ...] | list[str] = (),
+    capabilities: tuple[str, ...] | list[str] | str = "docker-default",
     network: bool = False,
     feedback_log: bool = False,
     feedback_artifacts: bool = False,
@@ -164,9 +164,10 @@ def harbor_deliverable(
     environment variable ``ARI_CASE``.
 
     ``feedback_artifacts=True`` shows the researcher the files the feedback
-    script writes under ``/logs/artifacts``, such as a plot. ``capabilities``,
-    ``network`` and ``feedback_log`` loosen the grader container; see
-    ``HarborGraderEvaluator``.
+    script writes under ``/logs/artifacts``, such as a plot. The grader keeps
+    Docker's default capabilities; ``capabilities`` replaces them with a list,
+    ``[]`` for none. ``network`` and ``feedback_log`` loosen the grader
+    container. See ``HarborGraderEvaluator``.
     """
     from . import harbor_deliverable as deliverables
 
