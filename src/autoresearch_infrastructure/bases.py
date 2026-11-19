@@ -270,15 +270,12 @@ def _ari_notes(run: Run, deliverable: str, elsewhere: bool, harbor: Path | None,
     """
     notes = {}
     researcher = run.settings.researcher is not None
-    submission = "Submit each candidate with the `record_candidate` tool, described below."
-    if researcher:
-        submission += " The time and the number of proposals this run allows are given in the last note."
+    submission = "Candidates are submitted with the `record_candidate` tool."
     if not split:
         # The task's text is shown as written, so it may name a submission loop of its own. Override that
         # loop only: a limit the grader applies to the deliverable, such as a per-call time budget, still holds.
-        submission += (" If the text above names its own submission tool, a time limit for your whole session "
-                       "or a number of submissions, these replace them. A limit that grading applies to the "
-                       "deliverable itself still holds.")
+        submission += (" It replaces any submission tool, session time limit or submission count named above; "
+                       "limits that grading applies to the deliverable still hold.")
     notes["ari_submission"] = submission
     notes["ari_grader"] = ("The grader runs in a separate container that you cannot reach. Its score is returned "
                            "to you after each submission.")
@@ -293,10 +290,8 @@ def _ari_notes(run: Run, deliverable: str, elsewhere: bool, harbor: Path | None,
         limits = run.settings.limits
         # The baseline takes one candidate and one panel of evaluations; a proposal needs both.
         proposals = max(0, min(limits.max_candidates - 1, limits.max_evaluations // max(panel, 1) - 1))
-        notes["ari_budget"] = (
-            f"You have up to {_duration(seconds)} in this session. A session started after this one ends gets "
-            f"the same time again. Across the whole run, up to {proposals} proposal"
-            f"{'' if proposals == 1 else 's'} can be submitted and scored.")
+        notes["ari_budget"] = (f"This session may run up to {_duration(seconds)}; a later session gets the same. "
+                               f"The run can score up to {proposals} proposal{'' if proposals == 1 else 's'}.")
     return notes
 
 

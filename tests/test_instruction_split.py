@@ -158,12 +158,9 @@ def test_a_deliverable_task_with_a_split_records_it_and_takes_the_tasks_time_lim
     assert plan["inputs"]["instruction_split"]["parts"][1]["tag"] == "verbatim"
     assert plan["inputs"]["researcher_timeout"] == 7200.0
     assert run.inputs.named_environment["ari_budget"] == (
-        "You have up to 2 hours in this session. A session started after this one ends gets the same time "
-        "again. Across the whole run, up to 3 proposals can be submitted and scored.")
+        "This session may run up to 2 hours; a later session gets the same. The run can score up to 3 proposals.")
     # A split drops what ARI replaces, so the submission note overrides nothing.
-    assert run.inputs.named_environment["ari_submission"] == (
-        "Submit each candidate with the `record_candidate` tool, described below. The time and the number of "
-        "proposals this run allows are given in the last note.")
+    assert run.inputs.named_environment["ari_submission"] == "Candidates are submitted with the `record_candidate` tool."
     assert list(run.inputs.named_environment)[-1] == "ari_budget"
     assert "examples" in run.inputs.named_environment and "ari_submission" in run.inputs.named_environment
     assert "24 hours" not in plan["instructions"]  # dropped, and the settings' budget stated instead
@@ -216,7 +213,7 @@ def test_without_a_split_the_submission_note_overrides_only_the_session_and_the_
     run = launch.open_run(task, settings, tmp_path / "run", "sha256:" + "a" * 64)
     notes = run.inputs.named_environment
     assert notes["ari_submission"].endswith(
-        "If the text above names its own submission tool, a time limit for your whole session or a number of "
-        "submissions, these replace them. A limit that grading applies to the deliverable itself still holds.")
+        "It replaces any submission tool, session time limit or submission count named above; limits that "
+        "grading applies to the deliverable still hold.")
     # Three evaluations: the baseline's and two more, though the candidate limit would allow three proposals.
-    assert notes["ari_budget"].endswith("up to 2 proposals can be submitted and scored.")
+    assert notes["ari_budget"].endswith("The run can score up to 2 proposals.")

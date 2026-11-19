@@ -192,7 +192,7 @@ Your candidate must obey each of these.
 
 ### Environment
 
-Facts about where you work and how grading runs. Nothing you do changes them.
+How your container and grading work.
 
 - Example clouds live in `/app/data/examples/`.
 - `/app/data/examples/manifest.json` lists each cloud's file name, `n`, and `k`.
@@ -205,11 +205,11 @@ Facts about where you work and how grading runs. Nothing you do changes them.
 - The process is SIGKILLed `time_budget_s + 5` seconds after it starts. Interpreter startup and
   importing your module count against that extra 5 seconds.
 - Available packages: the Python standard library, numpy, and scipy. No network access.
-- Submit each candidate with the `record_candidate` tool, described below. The time and the number of proposals this run allows are given in the last note.
+- Candidates are submitted with the `record_candidate` tool.
 - The grader runs in a separate container that you cannot reach. Its score is returned to you after each submission.
 - While you work, this container's network reaches only: `api.openai.com`, `api.anthropic.com`.
 - You work in the task's main container, so its other paths are as the text above says. Only `/app/output`, `/workspace` and `/tmp` are writable.
-- You have up to 24 hours in this session. A session started after this one ends gets the same time again. Across the whole run, up to 40 proposals can be submitted and scored.
+- This session may run up to 24 hours; a later session gets the same. The run can score up to 40 proposals.
 ````
 
 </details>
