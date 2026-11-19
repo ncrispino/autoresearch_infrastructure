@@ -142,7 +142,7 @@ def _validate_evidence_path(value: str, evidence_roots: dict[str, Path]) -> None
     suffix = value[len(prefix) :].lstrip("/")
     target = root / suffix if suffix else root
     boundary = root if root.is_dir() else root.parent
-    current = target.parent
+    current = target.parent if suffix else boundary  # the root itself has no parent inside the review
     while True:
         try:
             info = current.lstat()
@@ -159,6 +159,10 @@ def _validate_evidence_path(value: str, evidence_roots: dict[str, Path]) -> None
         info = target.lstat()
     except FileNotFoundError as exc:
         raise VerdictError("missing_evidence") from exc
+    # An empty evidence root may be cited as a whole: it shows that nothing a rule forbids is there.
+    # Anything else must be a regular file, so a pass always rests on content that can be read.
+    if not suffix and stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and not any(target.iterdir()):
+        return
     if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1:
         raise VerdictError("unsafe_evidence_file")
     if info.st_size > 1_000_000:

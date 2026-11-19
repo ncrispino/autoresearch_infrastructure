@@ -13,10 +13,11 @@ that server's ledger, are not used.
 import autoresearch_infrastructure as ari
 
 # The source states no rules a reviewer would judge; these are the importer's.
+# Rules forbid; what the deliverable must contain is the grader's to score, so an empty starter breaks none.
 RULES = [
-    "`select` computes its subset from the points it is given at call time. It does not store "
-    "subsets, indices or results chosen for particular clouds.",
-    "The submission is self-contained under the deliverable directory, as the task's text says.",
+    "Do not store subsets, indices or results chosen for particular clouds, or return them in place of a "
+    "subset computed from the points `select` is given.",
+    "Do not make the submission depend on anything outside the deliverable directory.",
 ]
 
 

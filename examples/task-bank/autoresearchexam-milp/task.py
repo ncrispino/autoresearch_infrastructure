@@ -11,11 +11,12 @@ intermediate panel and test.sh the final panel, both sealed inside that image.
 import autoresearch_infrastructure as ari
 
 # The source's rules are enforced by its grader; these restate the two a reviewer can judge.
+# Rules forbid; what the deliverable must contain is the grader's to score.
 RULES = [
-    "`select` decides from the observation it is given. The policy does not store branching decisions or "
-    "node counts chosen for particular instances.",
-    "The policy does not reach a MILP solver, directly or through another module or process, while it "
-    "is graded.",
+    "Do not store branching decisions or node counts chosen for particular instances, or return them in place "
+    "of a decision made from the observation `select` is given.",
+    "Do not reach a MILP solver from the policy while it is graded, directly or through another module or "
+    "process.",
 ]
 
 
