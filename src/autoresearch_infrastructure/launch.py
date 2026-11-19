@@ -26,7 +26,7 @@ from .instructions import task_facts
 from .ledger import StartLedger
 from .persistence import digest, remove_tree, sha256_file, write_json
 from .research import BASELINE, Research
-from .search import RESEARCHER_PROTOCOL, propose, researcher_starts, reset_candidate
+from .search import RESEARCHER_PROTOCOL, candidate_path, propose, researcher_starts, reset_candidate
 from .source_tree import python_tree_hash, snapshot, task_context_digest
 from .task import Run, RunSettings, Task, load_task
 
@@ -594,7 +594,7 @@ def run_researchers(run: OpenRun) -> dict:
                     research, agent, prompt, parent_id=parent, repeats=repeats, ledger=ledger,
                     context=run.context, history=history,
                     retain=inputs.environment.workspace == "keep",
-                    submissions=start.submissions, advance=advance,
+                    submissions=start.submissions, advance=advance, candidate=candidate_path(start),
                     record={**manifest, "presenter": _identity(run.task.presenter) or "default",
                             "environment": run.environment.prepared() if run.environment else None},
                 )})

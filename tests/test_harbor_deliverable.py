@@ -339,8 +339,8 @@ def imported(tmp_path, call, settings="reviewer = false\n", image=None, **files)
 def test_a_task_from_elsewhere_keeps_its_own_deliverable_path_for_the_grader_and_the_researcher(tmp_path):
     run = imported(tmp_path, "deliverable='/app/output', feedback='/tests/feedback.sh'",
                    **{"seed/answer.txt": "x\n"})
-    assert ("`/app/output`, the deliverable directory the text above names, is also mounted at "
-            "`/workspace/candidate/`. The two paths are one directory") in run.inputs.specification()
+    assert "/workspace/candidate" not in run.inputs.specification()  # the candidate is at the task's path only
+    assert "ari_deliverable" not in run.inputs.named_environment
     assert run.task.evaluator.deliverable.as_posix() == "/app/output"
     assert run.task.environment.candidate_at == "/app/output"
     plan = json.loads((tmp_path / "run/plan.json").read_text())
@@ -376,13 +376,13 @@ def test_the_researcher_is_started_with_the_candidate_at_the_tasks_own_path(tmp_
 
 @pytest.mark.parametrize("path", ["/workspace/candidate", "/workspace", "/", "/tmp/x", "/etc/app", "app/output",
                                   "/app/../etc", "/history/x", "/context"])
-def test_the_candidate_is_never_also_mounted_over_a_path_the_run_depends_on(path):
-    with pytest.raises(ValueError, match="cannot also be mounted"):
+def test_the_candidate_is_never_mounted_over_a_path_the_run_depends_on(path):
+    with pytest.raises(ValueError, match="cannot be mounted"):
         ari.Environment(candidate_at=path)
 
 
 @docker
-def test_the_researchers_container_sees_one_candidate_directory_at_both_paths(tmp_path, monkeypatch):
+def test_the_researchers_container_sees_the_candidate_only_at_the_tasks_path(tmp_path, monkeypatch):
     pytest.importorskip("harbor")
     from harbor.job import Job
 
@@ -412,9 +412,10 @@ def test_the_researchers_container_sees_one_candidate_directory_at_both_paths(tm
                   jobs_root=tmp_path / "jobs")
     mounts = {mount["target"]: mount for mount in configs[0].environment.mounts}
     assert mounts["/app/output"]["source"] == str(workspace / "candidate")
+    assert mounts["/workspace"]["source"] == str(workspace / "scratch")  # scratch, without the candidate
     assert not mounts["/app/output"].get("read_only") and not mounts["/workspace"].get("read_only")
 
-    # The same two mounts on real Docker: one directory, and the task's relative paths resolve as in grading.
+    # The same mounts on real Docker: the candidate at one path, and the task's relative paths resolve as in grading.
     name = "ari-candidate-" + tmp_path.name[-12:].lower().replace("_", "-")
     arguments = [flag for target in ("/workspace", "/app/output")
                  for flag in ("--mount", f"type=bind,source={mounts[target]['source']},target={target}")]
@@ -426,10 +427,11 @@ def test_the_researchers_container_sees_one_candidate_directory_at_both_paths(tm
                               check=True).stdout
 
     try:
-        assert inside("cat ../public.txt answer.txt /workspace/candidate/answer.txt") == "public\nfirst\nfirst\n"
-        inside("echo edited > /app/output/answer.txt")
+        assert inside("cat ../public.txt answer.txt") == "public\nfirst\n"
+        assert inside("ls -A /workspace") == ""
+        inside("echo edited > /app/output/answer.txt; echo note > /workspace/notes.txt")
         assert (workspace / "candidate/answer.txt").read_text() == "edited\n"
-        assert inside("cat /workspace/candidate/answer.txt") == "edited\n"
+        assert (workspace / "scratch/notes.txt").read_text() == "note\n"  # kept between starts like any scratch
         # Between submissions ARI replaces the candidate's files in place; a running container sees the new ones.
         (workspace / "candidate/answer.txt").unlink()
         (workspace / "candidate/next.txt").write_text("fresh\n")
@@ -542,17 +544,17 @@ def test_extract_seed_copies_a_starter_the_dockerfile_generates_and_the_run_chec
     assert not list((tmp_path / "other").rglob("candidate-0001"))  # opened, but nothing recorded or graded
 
 
-def test_the_file_table_names_the_tasks_own_path_first_when_the_candidate_has_two():
+def test_the_file_table_and_the_replies_name_only_the_tasks_own_path():
     from autoresearch_infrastructure.search import researcher_prompt
 
     plain = researcher_prompt("Goal", parent_id="candidate-0001", repeats=1, start=ari.Start(1, "candidate-0001", 1))
-    both = researcher_prompt("Goal", parent_id="candidate-0001", repeats=1,
-                             start=ari.Start(1, "candidate-0001", 1, candidate_at="/app/output"))
+    own = researcher_prompt("Goal", parent_id="candidate-0001", repeats=1,
+                            start=ari.Start(1, "candidate-0001", 1, candidate_at="/app/output", submissions=None))
     assert "| `/workspace/candidate/` | Your editable solution, copied from `candidate-0001`." in plain
-    assert "/app/output" not in plain and "$" not in both
-    row = next(line for line in both.splitlines() if line.startswith("| `/app/output/`"))
-    assert "also at `/workspace/candidate/`" in row and "one directory, not two copies" in row
-    assert "do not copy between the two paths" in row and "keep scratch files out of it" in row
+    assert "/app/output" not in plain and "$" not in own
+    assert "| `/app/output/` | Your editable solution, copied from `candidate-0001`." in own
+    assert "| `/workspace/` | Your working directory, for notes and scratch files. It is not submitted. |" in own
+    assert "/workspace/candidate" not in own and "When it names a `parent_id`, `/app/output/`" in own
 
 
 def test_an_empty_seed_is_described_as_empty():

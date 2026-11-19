@@ -37,10 +37,10 @@ _NOT_FOR_CANDIDATE = {"workspace", "context", "history", "run", "opt", "tmp", "i
 
 
 def candidate_mount(path) -> str:
-    """Check a second container path for the candidate directory and return it without a trailing slash."""
+    """Check a container path for the candidate directory and return it without a trailing slash."""
     parts = Path(path).parts if isinstance(path, str) else ()
     if len(parts) < 2 or parts[0] != "/" or ".." in parts or parts[1] in _NOT_FOR_CANDIDATE:
-        raise ValueError(f"The candidate cannot also be mounted at {path!r}: name an absolute path outside "
+        raise ValueError(f"The candidate cannot be mounted at {path!r}: name an absolute path outside "
                          "the system directories and the paths ARI mounts")
     return str(Path(path))
 
@@ -118,8 +118,9 @@ def run_filesystem_agent(
     still apply. Every job runs on local Docker and is deleted with its volumes
     when it ends, so only the mounted workspace outlives a start.
 
-    ``candidate_at`` also mounts the workspace's ``candidate`` directory,
-    read-write, at that container path.
+    ``candidate_at`` mounts the workspace's ``candidate`` directory,
+    read-write, at that container path instead. ``/workspace`` is then the
+    workspace's ``scratch`` directory, so the candidate is at one path only.
     """
     from harbor.agents.factory import AgentFactory
     from harbor.job import Job
@@ -170,10 +171,14 @@ def run_filesystem_agent(
         if target in {"/", "/workspace", "/run/autoresearch", "/opt/autoresearch/mcp_proxy.py"}:
             raise ValueError("Read-only input shadows a reserved filesystem-agent mount")
         mounts.append({"type": "bind", "source": str(Path(source).resolve()), "target": target, "read_only": True})
-    mounts.append({"type": "bind", "source": str(workspace.resolve()), "target": "/workspace"})
-    if candidate_at is not None:
-        # The same host directory at a second path: an edit at either is an edit at both.
+    if candidate_at is None:
+        mounts.append({"type": "bind", "source": str(workspace.resolve()), "target": "/workspace"})
+    else:
+        # The candidate at the task's own path only. The scratch files stay in the workspace on the host,
+        # beside the candidate, so they are kept between starts exactly as /workspace's files are.
         (workspace / "candidate").mkdir(parents=True, exist_ok=True)
+        (workspace / "scratch").mkdir(exist_ok=True)
+        mounts.append({"type": "bind", "source": str((workspace / "scratch").resolve()), "target": "/workspace"})
         mounts.append({"type": "bind", "source": str((workspace / "candidate").resolve()),
                        "target": candidate_mount(candidate_at)})
     with ExitStack() as stack:

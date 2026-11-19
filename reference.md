@@ -682,7 +682,7 @@ def task(run):
 | Argument | Meaning |
 | --- | --- |
 | `harbor_task` | The Harbor task directory. |
-| `deliverable` | The container path the grader reads the candidate from. The default is `/workspace/candidate`, the convention for a task written for ARI: the researcher edits that same path, so the instruction is true as written. For a task from elsewhere, pass its own path, such as `/app/output`: the researcher then sees the candidate at that path too. |
+| `deliverable` | The container path the grader reads the candidate from. The default is `/workspace/candidate`, the convention for a task written for ARI: the researcher edits that same path, so the instruction is true as written. For a task from elsewhere, pass its own path, such as `/app/output`: the researcher then sees the candidate at that path only, and `/workspace` is its scratch directory. |
 | `feedback` | The grader script whose reward the researcher sees and selection ranks: a path in the grader container. |
 | `sealed` | The grader script whose reward is held out. The default is Harbor's `/tests/test.sh`. `None` means the task has no held-out score. |
 | `seed` | The starting deliverable, a directory relative to the task file. The default is `environment/candidate` in the Harbor task, the directory its Dockerfile copies to `deliverable`, so the files exist once. Without that directory it is `seed/` beside the task file. |
@@ -779,10 +779,12 @@ image has nothing at that path or when a file is not UTF-8 text, which a
 candidate cannot hold. Pass `check_seed=False` to start from files of your own
 instead.
 
-The researcher's candidate is always at `/workspace/candidate/`. When
-`deliverable` is another path, the same directory is also mounted there in the
-researcher's container, and the instructions say that the two paths are one
-directory. A deliverable written to run from the task's own place then behaves
+The researcher's candidate is at `deliverable`, and only there. With the
+default, `/workspace/candidate`, that is ARI's usual layout. With another path,
+such as `/app/output`, the candidate is mounted at that path in the
+researcher's container, `/workspace` holds only the researcher's scratch
+files, and the file table and the replies name the task's path. The task's text
+is then true as written. A deliverable written to run from the task's own place then behaves
 for the researcher as it does for the grader: `../data` from `/app/output` is
 `/app/data` in both. This is `ari.Environment(candidate_at=...)`, which any task
 can set. The instructions also say that `record_candidate` replaces the task's
@@ -858,8 +860,8 @@ every non-blank character must be in some part, except a list marker at the
 start of a line. A miss names the line and the text. The plan records the whole
 mapping with the hashes of the split and the source as `inputs.instruction_split`.
 
-ARI's own environment notes follow the task's, by name: `ari_deliverable`,
-`ari_submission`, `ari_grader`, `ari_network`, `ari_container` and `ari_budget`.
+ARI's own environment notes follow the task's, by name: `ari_submission`,
+`ari_grader`, `ari_network` (when the task restricts it), `ari_container` and `ari_budget`.
 A split may not use those names. Without a split the rules are named `rule_1`,
 `rule_2`, … and the notes `note_1`, `note_2`, …. The reviewer's checks use the
 same names. [The carps example](examples/task-bank/autoresearchexam-carps/TASK.md#how-instructionmd-is-split)
@@ -1230,10 +1232,10 @@ ends. `workspace` says what survives besides the candidate and the memory:
 A changed export is refused before the next start. An export larger than the
 context limits is not kept, and its record says why.
 
-`candidate_at` names a second container path at which the researcher sees the
-candidate directory. It is the same directory as `/workspace/candidate/`, not a
-copy, and stays in step when ARI replaces the candidate's files between
-submissions. Use it for files written to run from a fixed place. It may not be
+`candidate_at` names the container path at which the researcher sees the
+candidate directory, in place of `/workspace/candidate/`. `/workspace` is then a
+scratch directory, kept between starts as `workspace` says, and the candidate
+stays in step when ARI replaces its files between submissions. Use it for files written to run from a fixed place. It may not be
 a system directory or a path ARI mounts.
 
 `harbor` names a Harbor task directory. ARI uses only its `task.toml`

@@ -17,6 +17,14 @@ from .source_tree import snapshot, task_context_digest
 RESEARCHER_PROTOCOL = Template(Path(__file__).with_name("researcher-protocol.md").read_text())
 
 
+CANDIDATE = "/workspace/candidate"
+
+
+def candidate_path(start=None) -> str:
+    """Where the researcher sees the candidate: the task's own path when it names one."""
+    return getattr(start, "candidate_at", None) or CANDIDATE
+
+
 def researcher_prompt(goal: str, *, parent_id: str, repeats: int, start=None) -> str:
     """The task's own instructions, followed by the file layout and how to submit.
 
@@ -43,21 +51,19 @@ def researcher_prompt(goal: str, *, parent_id: str, repeats: int, start=None) ->
                      "as ATIF JSON, oldest first. |")
     submissions = 1 if start is None else start.submissions
     context = start is None or start.context
-    also = None if start is None else start.candidate_at
-    candidate_row = (
-        f"| `/workspace/candidate/` | Your editable solution, copied from `{parent_id}`. Only this directory "
-        "is submitted. |\n" if also is None else
-        f"| `{also}/`, also at `/workspace/candidate/` | Your editable solution, copied from `{parent_id}`. "
-        "The two paths are one directory, not two copies: a change at either is a change at both. Work at "
-        f"`{also}/` as the task's text does, keep scratch files out of it, and do not copy between the two "
-        "paths. Only this directory is submitted. |\n")
+    candidate = candidate_path(start)
+    candidate_row = (f"| `{candidate}/` | Your editable solution, copied from `{parent_id}`. Only this directory "
+                     "is submitted. |\n")
+    if candidate != CANDIDATE:
+        candidate_row += ("| `/workspace/` | Your working directory, for notes and scratch files. It is not "
+                          "submitted. |\n")
     return goal.rstrip() + "\n\n" + RESEARCHER_PROTOCOL.substitute(
         candidate_row=candidate_row,
         parent_id=parent_id, repeats=repeats, memory_rows=rows, parent_evidence=evidence,
         context_row="| `/context/` | Read-only task material. |\n" if context else "",
         readonly="`/context` and `/history` are" if context else "`/history` is",
         after_recording=_ONE_SUBMISSION if submissions == 1 else _SEVERAL_SUBMISSIONS.format(
-            limit="as many candidates as the run's budget allows" if submissions is None
+            candidate=candidate, limit="as many candidates as the run's budget allows" if submissions is None
             else f"up to {submissions} candidates"),
     )
 
@@ -70,7 +76,7 @@ _SEVERAL_SUBMISSIONS = """\
 - A reply containing `candidate_id` means your candidate was recorded, even if
   it is invalid, its evaluation failed, or its score is poor. In this session
   you may record {limit}, one at a time.
-- Read `next` in each reply. When it names a `parent_id`, `/workspace/candidate/`
+- Read `next` in each reply. When it names a `parent_id`, `{candidate}/`
   now holds a fresh copy of that candidate, which is the best one so far and
   may not be the one you just submitted. `/history` has been updated. Read the
   new evidence, edit the files and submit again in the same way.
@@ -89,9 +95,10 @@ class SubmissionRecorder:
     researcher which.
     """
 
-    def __init__(self, research, parent_id, repeats, *, limit: int | None = 1, advance=None):
+    def __init__(self, research, parent_id, repeats, *, limit: int | None = 1, advance=None,
+                 candidate: str = CANDIDATE):
         self.research, self.parent_id, self.repeats = research, parent_id, repeats
-        self.limit, self.advance = limit, advance
+        self.limit, self.advance, self.candidate = limit, advance, candidate
         self.attempts, self.closed, self.submissions = 0, None, []
 
     def dispatch_record_candidate(self, session_id, arguments):
@@ -130,7 +137,7 @@ class SubmissionRecorder:
             return {**result, "next": None, "stopped": self.closed}
         # Say plainly that the session goes on: a null count read as "none left" ended a real session early.
         following = {"parent_id": self.parent_id,
-                     "note": f"This session continues. /workspace/candidate/ now holds a fresh copy of "
+                     "note": f"This session continues. {self.candidate}/ now holds a fresh copy of "
                              f"{self.parent_id}, the best candidate so far. Edit it and submit again; the reply to "
                              "that submission says whether another fits the budget."}
         if self.limit is not None:
@@ -154,7 +161,7 @@ def reset_candidate(research, parent_id: str) -> None:
 
 def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledger, context: Path,
             history: Path | None = None, record: dict | None = None, retain: bool | None = None,
-            submissions: int | None = 1, advance=None) -> dict:
+            submissions: int | None = 1, advance=None, candidate: str = CANDIDATE) -> dict:
     """Start one researcher on a copy of ``parent_id`` and report what it did.
 
     The start is charged to ``ledger`` before the agent runs and is never
@@ -168,6 +175,7 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
     ``submissions`` is how many candidates this one session may record: one
     by default, a larger number, or ``None`` for no limit of its own. Beyond
     one, ``advance()`` is called after each recording; see ``SubmissionRecorder``.
+    ``candidate`` is the container path the researcher edits, named in replies.
     ``retain`` makes what survives a start explicit. ``None`` leaves files
     outside the candidate as they are. ``True`` clears the workspace, restores
     the files the previous start exported, and after this start exports the
@@ -178,7 +186,8 @@ def propose(research, agent, prompt: str, *, parent_id: str, repeats: int, ledge
     invocation = uuid4().hex
     evidence = research.root / "agent/invocations" / invocation
     inputs = research.root / "agent/inputs" / invocation
-    recorder = SubmissionRecorder(research, parent_id, repeats, limit=submissions, advance=advance)
+    recorder = SubmissionRecorder(research, parent_id, repeats, limit=submissions, advance=advance,
+                                  candidate=candidate)
     status, error, settled = "failed", None, False
     described = {
         **(record or {}),

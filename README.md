@@ -80,8 +80,10 @@ A Harbor task from elsewhere, such as a published benchmark task, is used
 without editing its files: pass `deliverable=` with the path its instruction
 names, such as `/app/output`. The grader and the researcher both see the
 candidate at that path, so a relative path in the deliverable, such as
-`../data`, means the same in both containers. For the researcher it is the same
-directory as `/workspace/candidate/`. `ari extract-seed` copies the task's
+`../data`, means the same in both containers. The researcher sees it only there:
+the instruction is true as written, and `/workspace` is its scratch directory. A
+`split=` file adapts the task's instruction to ARI's objective, rules and
+environment notes, recording each change. `ari extract-seed` copies the task's
 starting files out of its image, and every run checks that the seed still
 matches them.
 

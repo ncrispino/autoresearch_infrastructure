@@ -95,7 +95,8 @@ def harbor_deliverable(
         edits that same path, so the instruction is true as written here and
         under ``harbor run``. For a task from elsewhere, name its own path,
         such as ``/app/output``; the researcher then sees the candidate at that
-        path as well, so the task's relative paths and tools work unchanged.
+        path only, so the task's text, relative paths and tools work
+        unchanged, and ``/workspace`` is its scratch directory.
     ``seed``
         The starting deliverable, a directory relative to the task file. The
         default is ``environment/candidate`` in the Harbor task, the directory
@@ -257,11 +258,6 @@ def _task_time_limit(task: Path) -> float | None:
 def _ari_notes(run: Run, deliverable: str, elsewhere: bool, harbor: Path | None, limit: float | None) -> dict:
     """The environment notes ARI adds, by name, so a transform can omit or reword any of them."""
     notes = {}
-    if elsewhere:
-        notes["ari_deliverable"] = (
-            f"`{deliverable}`, the deliverable directory the text above names, is also mounted at "
-            "`/workspace/candidate/`. The two paths are one directory, not two copies. Its contents are what "
-            f"is graded, and the grader reads them at `{deliverable}`.")
     notes["ari_submission"] = ("Submitting is described under the file layout below. It replaces any submission "
                                "tool, time limit or submission count the text above names.")
     notes["ari_grader"] = ("The grader runs in a separate container that you cannot reach. Its score is returned "

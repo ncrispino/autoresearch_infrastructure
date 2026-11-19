@@ -38,7 +38,7 @@ is "no submission".
 
 | Source | In `task.py` | Why |
 | --- | --- | --- |
-| `/app/output`, named by `instruction.md` | `deliverable="/app/output"` | The researcher also sees the candidate there, so the task's text is true as written. |
+| `/app/output`, named by `instruction.md` | `deliverable="/app/output"` | The researcher sees the candidate there and nowhere else, so the task's text is true as written. `/workspace` is its scratch directory. |
 | `environment/are-grader-ctx/Dockerfile` | `grader="environment/are-grader-ctx"` | The grader's own image, with both hidden splits in its `/tests`. ARI builds it once and leaves the directory out of the agents' container. |
 | `/tests/intermediate.sh` in that image | `feedback` | Scores the `intermediate` split. The researcher sees this score. |
 | `/tests/test.sh` in that image | `sealed` | Scores the `final` split. Recorded privately. |
@@ -102,8 +102,7 @@ fails. A rule only the reviewer can judge says so.
 Long sources are cut short in this table; the TOML has them in full.
 
 ARI adds its own environment notes after the task's, also by name, so a study can
-omit or reword any of them like the task's own: `ari_deliverable` (when the
-deliverable is not `/workspace/candidate`), `ari_submission`, `ari_grader`,
+omit or reword any of them like the task's own: `ari_submission`, `ari_grader`,
 `ari_network`, `ari_container` and `ari_budget`. A split may not reuse those names.
 
 A study that perturbs the inputs names what it changes:

@@ -126,11 +126,12 @@ class Environment:
         next start. With ``"reset"``, nothing is exported and every start
         begins with only the parent candidate.
     ``candidate_at``
-        A second container path at which the researcher sees the candidate
-        directory, such as ``/app/output``. It is the same directory as
-        ``/workspace/candidate/``, not a copy. Use it when the files are
-        written to run from a fixed place, so that a relative path such as
-        ``../data`` means the same to the researcher as it does to the grader.
+        The container path at which the researcher sees the candidate
+        directory, such as ``/app/output``, in place of
+        ``/workspace/candidate/``. ``/workspace`` is then a scratch directory
+        that does not hold the candidate. Use it for a task that names its own
+        deliverable path, so its text is true as written and a relative path
+        such as ``../data`` means the same to the researcher as to the grader.
     """
 
     harbor: Path | str | None = None
@@ -210,7 +211,7 @@ class Start:
     mounted as files. ``submissions`` is how many candidates this session may
     record: one, a larger number, or ``None`` for no limit of its own.
     ``context`` says whether the task has context files, mounted at ``/context``.
-    ``candidate_at`` is a second path at which the candidate directory is mounted.
+    ``candidate_at`` is the path at which the candidate directory is mounted in place of ``/workspace/candidate``.
     """
 
     number: int

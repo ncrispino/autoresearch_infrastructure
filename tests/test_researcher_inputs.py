@@ -595,3 +595,9 @@ def test_an_unlimited_session_is_told_it_continues_without_a_null_count():
     assert reply["next"]["parent_id"] == "candidate-0002"
     assert "remaining_in_this_session" not in reply["next"] and None not in reply["next"].values()
     assert reply["next"]["note"].startswith("This session continues.")
+    assert "/workspace/candidate/ now holds" in reply["next"]["note"]
+    elsewhere = SubmissionRecorder(Research(), "candidate-0001", 1, limit=None, advance=lambda: "candidate-0002",
+                                   candidate="/app/output")
+    reply = elsewhere.dispatch_record_candidate("research", {
+        "candidate": "workspace", "proposal": {"hypothesis": "h", "mechanism": "m"}})
+    assert "/app/output/ now holds" in reply["next"]["note"] and "/workspace" not in reply["next"]["note"]
