@@ -896,7 +896,11 @@ One researcher session then makes every proposal, so the run normally uses one
 researcher start; if the agent stops early, the next start is a fresh
 conversation. The session ends when its timeout, the candidate limit or the
 evaluation limit is reached, whichever comes first. The time a submission waits
-for review and grading counts against the session's timeout. Without the
+for review and grading counts against the session's timeout. Codex limits how
+long one MCP tool call may take, 300 seconds by default in 0.170, so ARI gives
+the submission tool `tool_timeout_sec` equal to the researcher's timeout, in the
+Codex `config` it passes through Harbor; a `config` of your own is kept, and may
+not define the `autoresearch` server. Without the
 continuing memory, each proposal is a new session with the timeout to itself.
 
 ### Edit Harbor task files and keep the solver fixed

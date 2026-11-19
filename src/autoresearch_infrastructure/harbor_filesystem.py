@@ -96,6 +96,41 @@ def _save_native_trajectory(jobs_root, job_name, evidence):
     write_json(evidence / "trajectory-metadata.json", metadata)
 
 
+CODEX_TOOL_TIMEOUT = 7200  # seconds, when the agent has no timeout of its own
+
+
+def _codex_server(agent, server) -> bool:
+    """Give Codex the candidate server in its own config, with a tool timeout as long as its session.
+
+    A submission waits for review and grading, which can take longer than the
+    time Codex gives an MCP tool call by default, and a call that times out ends
+    the session. Harbor writes its MCP servers into Codex's config.toml with
+    only a command and arguments, so the server goes into the agent's native
+    ``config`` instead, where Codex reads ``tool_timeout_sec``. Returns whether
+    it did; any other agent gets the server through Harbor as before.
+    """
+    from harbor.agents.factory import AgentFactory
+    from harbor.agents.installed.codex import Codex
+
+    if not issubclass(AgentFactory.get_agent_class_from_config(agent), Codex):
+        return False
+    import tomllib
+
+    native = agent.kwargs.get("config")
+    if isinstance(native, (str, Path)):
+        native = tomllib.loads(Path(native).read_text(encoding="utf-8"))
+    native = json.loads(json.dumps(native or {}))
+    servers = native.setdefault("mcp_servers", {})
+    if not isinstance(servers, dict) or "autoresearch" in servers:
+        raise ValueError("The Codex config may not define mcp_servers.autoresearch: "
+                         "ARI reserves it for the candidate recorder")
+    timeout = agent.override_timeout_sec or CODEX_TOOL_TIMEOUT
+    servers["autoresearch"] = {"command": server.command, "args": list(server.args),
+                               "tool_timeout_sec": float(math.ceil(timeout))}
+    agent.kwargs["config"] = native
+    return True
+
+
 def run_filesystem_agent(
     *, agent, image, instruction, readonly, workspace, evidence, jobs_root,
     recorder=None, role="validity", environment=None, candidate_at=None,
@@ -193,11 +228,13 @@ def run_filesystem_agent(
             ])
             # `env` sets the socket path for the proxy using only Harbor's own
             # command-and-arguments form, which every agent already understands.
-            agent.mcp_servers.append(MCPServerConfig(
+            server = MCPServerConfig(
                 name="autoresearch", transport="stdio", command="env",
                 args=["AUTORESEARCH_SOCKET=/run/autoresearch/controller.sock", "python",
                       "/opt/autoresearch/mcp_proxy.py"],
-            ))
+            )
+            if not _codex_server(agent, server):
+                agent.mcp_servers.append(server)
         config = JobConfig(
             job_name=role + "-" + uuid4().hex, jobs_dir=jobs_root,
             agents=[agent], tasks=[TaskConfig(path=task)],

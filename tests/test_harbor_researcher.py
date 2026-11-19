@@ -98,11 +98,15 @@ def test_native_harbor_researcher_dispatches_to_recorder_without_custom_agent(tm
     assert config.agents[0].override_timeout_sec == 120
     assert config.agents[0].skills == source.skills == [str(skill)]
     assert source.mcp_servers == [] and agent.agent.mcp_servers == []
-    server = config.agents[0].mcp_servers[0]
-    assert server.name == "autoresearch" and server.transport == "stdio"
-    assert server.command == "env"
-    assert server.args == ["AUTORESEARCH_SOCKET=/run/autoresearch/controller.sock", "python",
-                           "/opt/autoresearch/mcp_proxy.py"]
+    command = ["AUTORESEARCH_SOCKET=/run/autoresearch/controller.sock", "python", "/opt/autoresearch/mcp_proxy.py"]
+    if name == "codex":  # in Codex's own config, where its tool timeout can be set
+        assert config.agents[0].mcp_servers == [] and "config" not in source.kwargs
+        assert config.agents[0].kwargs["config"]["mcp_servers"]["autoresearch"] == {
+            "command": "env", "args": command, "tool_timeout_sec": 120.0}
+    else:
+        server = config.agents[0].mcp_servers[0]
+        assert server.name == "autoresearch" and server.transport == "stdio"
+        assert server.command == "env" and server.args == command
     assert recorder.calls == [("research", {"candidate": "workspace"})]
     mounts = {mount["target"]: mount for mount in config.environment.mounts}
     assert mounts["/context"]["read_only"] is True
@@ -172,3 +176,23 @@ def test_researcher_requires_a_recorder_before_creating_workspace(tmp_path):
     with pytest.raises(ValueError, match="requires a candidate recorder"):
         agent.run("Fixture", workspace=tmp_path / "workspace", evidence=tmp_path / "evidence")
     assert not tmp_path.joinpath("workspace").exists()
+
+
+def test_codex_keeps_its_own_config_and_waits_for_a_submission_as_long_as_its_session(tmp_path, monkeypatch):
+    configs, _ = fake_jobs(monkeypatch)
+    native = tmp_path / "codex.toml"
+    native.write_text('model_reasoning_effort = "high"\n[mcp_servers.docs]\ncommand = "docs-server"\n')
+    agent = CodingAgent(agent=AgentConfig(name="codex", model_name="fixture-model", override_timeout_sec=86400,
+                                          kwargs={"config": str(native)}), image=IMAGE)
+    agent.run("Fixture instruction", workspace=tmp_path / "workspace", evidence=tmp_path / "evidence",
+              recorder=Recorder(), jobs_root=tmp_path / "jobs")
+    written = configs[0].agents[0].kwargs["config"]
+    assert written["model_reasoning_effort"] == "high" and written["mcp_servers"]["docs"] == {"command": "docs-server"}
+    assert written["mcp_servers"]["autoresearch"]["tool_timeout_sec"] == 86400.0
+    taken = tmp_path / "taken.toml"
+    taken.write_text('[mcp_servers.autoresearch]\ncommand = "other"\n')
+    agent = CodingAgent(agent=AgentConfig(name="codex", model_name="fixture-model",
+                                          kwargs={"config": str(taken)}), image=IMAGE)
+    with pytest.raises(ValueError, match="reserves it for the candidate recorder"):
+        agent.run("Fixture instruction", workspace=tmp_path / "w2", evidence=tmp_path / "e2",
+                  recorder=Recorder(), jobs_root=tmp_path / "jobs")

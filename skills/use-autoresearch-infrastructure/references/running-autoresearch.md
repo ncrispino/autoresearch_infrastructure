@@ -68,11 +68,15 @@ instructions, after the task's validity function if it has one.
   run opens, before any start.
 - The researcher submits a candidate and then waits while ARI reviews and
   evaluates it. Set its timeout long enough to cover that wait. The default is
-  600 seconds and the most is 86400, for one session that makes every proposal.
+  the task's own limit, such as a Harbor task's `[agent] timeout_sec`, or else
+  600 seconds; the most is 86400, for one session that makes every proposal.
   A reviewer's most is 7200.
-- A long evaluation can also outlast the tool-call timeout of the agent's own
-  client, which Harbor does not set for Codex. If the connection breaks, ARI
-  still finishes and saves the candidate.
+- The agent's own client also limits how long one tool call may take. For
+  Codex, ARI sets the submission tool's `tool_timeout_sec` to the researcher's
+  timeout, in the `config` it passes to Codex, so a long review and grading does
+  not end the session. Other agents keep their client's limit. If the
+  connection breaks anyway, ARI still finishes and saves the candidate, and the
+  next start continues from it.
 
 Each task defines what it reads from `[task]`. The two Harbor examples read
 the solver from `[task.solver]` with different keys, described in
