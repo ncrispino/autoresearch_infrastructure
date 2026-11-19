@@ -82,3 +82,30 @@ said `cpus = 4`. Building took 43 minutes in all, from 46 seconds to about 3½ m
 task; the images take 0.8 to 5.2 GB a task. Three tasks ship a starter file; the rest
 start from an empty deliverable, so their rules must be prohibitions for the baseline
 to pass review.
+
+## Short researcher runs
+
+Three imports were then run end to end (issue #9) with Codex 0.170.0 and `gpt-6-luna`
+as researcher and reviewer, on the baseline plus two proposals, with review on and
+one continuing researcher session (`conversation_mode="continue"`). The machine had 4
+CPUs, so each run's settings said `cpus = 4`. Rules were the importers' prohibitions.
+
+| Task | Feedback score: baseline → 2 → 3 | Sealed score: baseline → 2 → 3 | Researcher starts | Time | Model cost |
+| --- | --- | --- | --- | --- | --- |
+| budgeted-imputation-mcar50 (ships a starter) | 0 → 0.531 → 0.532 | 0 → 0.522 → 0.523 | 1 | 9 min | $0.035 |
+| act-tensor-sparse-panel-imputation-r2 | 0 → 0.458 → 0.483 | 0 → 0.455 → 0.479 | 1 | 20 min | $0.071 |
+| cpu-llm-decode-throughput | 0 → 0.102 → 0.109 | 0 → 0.125 → 0.113 | 2 | 41 min | $0.058 |
+
+Every candidate passed review. In the first two runs one session made both proposals,
+and the sealed score rose with the feedback score. In the third the selected candidate,
+`candidate-0003`, scored higher on feedback but lower on the sealed split than its
+parent: a small overfit to the split the researcher was shown, which the sealed score
+exists to catch.
+
+The third run used two researcher starts because its first session stopped early.
+Codex gives an MCP tool call 300 seconds, and this task's review and grading took
+about 9 minutes, so `record_candidate` timed out on the client side while ARI went on
+to record and grade the candidate. The agent, as the instructions say, did not
+resubmit and ended the session; the next start continued from the recorded
+candidate, so no proposal was lost. A task whose grading takes over 5 minutes needs
+a longer tool timeout in the agent for one session to make every proposal.
