@@ -17,7 +17,6 @@ import autoresearch_infrastructure as ari
 RULES = [
     "Do not store subsets, indices or results chosen for particular clouds, or return them in place of a "
     "subset computed from the points `select` is given.",
-    "Do not make the submission depend on anything outside the deliverable directory.",
 ]
 
 
