@@ -36,7 +36,7 @@ from .persistence import digest, remove_tree, sha256_file, write_json
 from .review import LLMValidity
 from .snapshots import record_snapshot
 from .source_tree import evaluation_evidence_digest, materialize, python_tree_hash, snapshot
-from .validity import ValidityVerdict
+from .validity import ValidityVerdict, VerdictError
 
 _SESSION = "research"
 _SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}")
@@ -348,6 +348,23 @@ class Research(EvaluationLifecycle):
             self.evidence(candidate_id).get("evaluation") == "completed"
         )
 
+    def review_failed(self, candidate_id: str) -> bool:
+        """Whether the candidate's validity check could not finish, so it was never judged.
+
+        Such a candidate is recorded as invalid, with a ``controller_error``.
+        Recording it again checks it again.
+        """
+        return bool(self.evidence(candidate_id).get("validity", {}).get("controller_error"))
+
+    def rejected_by_reviewer(self, candidate_id: str) -> bool:
+        """Whether a reviewer judged the candidate and rejected it.
+
+        A rejection by a validity function, or a review that could not finish, is not one.
+        """
+        validity = self.evidence(candidate_id).get("validity", {})
+        return validity.get("verdict") == "invalid" and validity.get("decided_by") == "reviewer" and (
+            not validity.get("controller_error"))
+
     def candidate_files(self, candidate_id: str) -> Path:
         """The read-only snapshot of a saved candidate, checked against its hash."""
         return self._verified_candidate_path(_SESSION, candidate_id)
@@ -517,11 +534,17 @@ class Research(EvaluationLifecycle):
         proposal=None,
         evaluation=None,
         session_id=_SESSION,
+        measure_rejected=False,
     ) -> dict:
         """Save the workspace as a new candidate, or add repeats to a saved one.
 
         ``candidate="workspace"`` snapshots the current files. A saved candidate ID
         evaluates only the repeats that candidate is still missing.
+
+        ``measure_rejected=True`` also evaluates the candidate when a reviewer
+        rejected it. It stays invalid and is never selected. A candidate that a
+        validity function rejected, or whose review could not finish, is still
+        not evaluated.
         """
         self._require_owner()
         if type(total_repeats) is not int or not 1 <= total_repeats <= self.config.max_repeats:
@@ -536,7 +559,7 @@ class Research(EvaluationLifecycle):
             self._recording = True
             self._display.start_panel()
             try:
-                result = self._record(session_id, candidate, total_repeats, parent_id, proposal)
+                result = self._record(session_id, candidate, total_repeats, parent_id, proposal, measure_rejected)
                 self._notify(_final_stage(result), measured=result["evidence"])
                 return result
             except BaseException:
@@ -545,7 +568,7 @@ class Research(EvaluationLifecycle):
             finally:
                 self._recording = False
 
-    def _record(self, session_id, candidate, repeats, parent_id, proposal):
+    def _record(self, session_id, candidate, repeats, parent_id, proposal, measure_rejected=False):
         session = self._session(session_id)
         if candidate == "workspace":
             candidate = self._save_workspace(session, parent_id, proposal)
@@ -562,7 +585,9 @@ class Research(EvaluationLifecycle):
         # A review that failed inside the controller is retried; a verdict is final.
         if evidence is None or evidence["validity"].get("controller_error"):
             evidence = self._review(record, path)
-        if evidence["validity"]["verdict"] == "valid":
+        if evidence["validity"]["verdict"] == "valid" or (
+            measure_rejected and self.rejected_by_reviewer(candidate)
+        ):
             self._verify_saved_cells(evidence)
             self._evaluate(session_id, candidate, SimpleNamespace(role="research"), self.contract_hash, repeats)
         self._save_state()
@@ -631,7 +656,7 @@ class Research(EvaluationLifecycle):
         )
         directory.mkdir(parents=True, exist_ok=True)
         context = ValidityContext(record["source_hash"], self.contract_hash, directory)
-        controller_error = None
+        controller_error = review_error = None
         try:
             verdict = self._run_external(self.validity, path, context)
             if not isinstance(verdict, (Validity, ValidityVerdict)):
@@ -642,6 +667,16 @@ class Research(EvaluationLifecycle):
             ):
                 raise ValueError("Validity verdict is bound to a different candidate or contract")
             self.candidate_files(candidate)
+        except VerdictError as exc:
+            # The reviewer's file could not be read: the candidate was not judged, so say so plainly.
+            tries = getattr(exc, "tries", 1)
+            verdict = Validity("invalid", (
+                f"Validity failed: VerdictError: {exc}. The reviewer's verdict could not be accepted"
+                + (f" after {tries} tries" if tries > 1 else "")
+                + ", so this candidate was not judged. Recording it again reviews it again.",
+            ))
+            controller_error = "VerdictError"
+            review_error = {"code": exc.code, "detail": exc.detail, "tries": tries}
         except Exception as exc:
             # A check that cannot finish never admits the candidate.
             verdict = Validity("invalid", (f"Validity failed: {type(exc).__name__}: {exc}",))
@@ -650,6 +685,11 @@ class Research(EvaluationLifecycle):
         saved.update(candidate_hash=record["source_hash"], contract_hash=self.contract_hash)
         if controller_error:
             saved["controller_error"] = controller_error
+            if review_error:
+                saved["review_error"] = review_error
+        else:
+            # A verdict file is a reviewer's judgment; a Validity comes from a validity function.
+            saved["decided_by"] = "reviewer" if isinstance(verdict, ValidityVerdict) else "check"
         evidence = {
             "contract_hash": self.contract_hash,
             "validity": saved,
@@ -865,6 +905,12 @@ class Research(EvaluationLifecycle):
                 "validity": {
                     "verdict": validity.get("verdict"),
                     "reasons": validity.get("reasons", record.get("reasons", [])),
+                    # One entry per criterion; read each result here rather than from the wording of reasons.
+                    **({"checks": [{key: check[key] for key in ("criterion", "status", "reason") if key in check}
+                                   for check in validity["checks"]]} if validity.get("checks") else {}),
+                    # Set when the check could not finish: then the candidate was not judged at all.
+                    **({"controller_error": validity["controller_error"]}
+                       if validity.get("controller_error") else {}),
                 },
                 "evaluation": {
                     "status": evidence.get("evaluation", "not_started"),

@@ -74,7 +74,7 @@ def agent(monkeypatch):
                 'contract_hash': assignment['contract_hash'],
                 'verdict': 'invalid',
                 'reasons': ['Review not completed.'],
-                'checks': [{'criterion': name, 'status': 'fail', 'evidence_paths': []}
+                'checks': [{'criterion': name, 'status': 'fail', 'evidence_paths': [], 'reason': 'Not reviewed.'}
                            for name in assignment['required_criteria']],
             }
             outcome = outcomes.pop(0) if outcomes else 'valid'
@@ -150,7 +150,7 @@ def test_json_policy_budget_independent_mounts_and_file_authority(tmp_path, agen
         assert result['status'] == 'valid' and result['evidence']['evaluation'] == 'completed'
         assert research.state['solver_trial_starts'] == 1
         ledger = json.loads((research.output / 'validity-starts.json').read_text())
-        assert ledger['counts'] == {'reviewer': 1}
+        assert ledger['counts'] == {'reviewer': 1, 'reviewer_retry': 0}
         assert next(iter(ledger['starts'].values()))['cost_usd'] == 0.01
         assert IMAGE in (calls[0]['config'].tasks[0].path / 'task.toml').read_text()
         assert calls[0]['config'].agents[0].model_name == 'gpt-6-luna'
@@ -174,11 +174,105 @@ def test_json_policy_budget_independent_mounts_and_file_authority(tmp_path, agen
 def test_rejected_or_malformed_review_never_starts_evaluator(tmp_path, agent, outcome):
     calls, outcomes = agent
     outcomes[:] = [outcome]
-    with make(tmp_path, policy()) as research:
+    with make(tmp_path, policy(verdict_retries=0)) as research:
         result = research.record_candidate()
         assert result['status'] == 'invalid'
         assert research.state['solver_trial_starts'] == 0
         assert len(calls) == 1
+
+
+@pytest.mark.parametrize('outcome', ['invalid', 'unreviewed', 'wrong-hash'])
+def test_a_judgment_or_a_verdict_for_another_candidate_is_not_retried(tmp_path, agent, outcome):
+    calls, outcomes = agent
+    outcomes[:] = [outcome]
+    with make(tmp_path, policy()) as research:
+        assert research.record_candidate()['status'] == 'invalid'
+        assert len(calls) == 1
+        counts = json.loads((research.output / 'validity-starts.json').read_text())['counts']
+        assert counts == {'reviewer': 1, 'reviewer_retry': 0}
+        assert research.review_failed('candidate-0001') == (outcome == 'wrong-hash')
+        assert research.rejected_by_reviewer('candidate-0001') == (outcome != 'wrong-hash')
+
+
+def _prompt(call):
+    return (call['config'].tasks[0].path / 'instruction.md').read_text()
+
+
+@pytest.mark.parametrize('outcome, code', [
+    ('malformed', 'malformed_json'), ('missing', 'missing_file'), ('bad-evidence', 'evidence_path_outside_review'),
+])
+def test_a_verdict_in_the_wrong_form_is_corrected_by_a_retry_start(tmp_path, agent, outcome, code):
+    calls, outcomes = agent
+    outcomes[:] = [outcome, 'valid']
+    with make(tmp_path, policy()) as research:
+        result = research.record_candidate()
+        assert result['status'] == 'valid' and result['evidence']['evaluation'] == 'completed'
+        assert len(calls) == 2
+        # The second start sees the error and the same workspace, with the earlier file still in it.
+        assert calls[1]['workspace'] == calls[0]['workspace']
+        assert 'Correction 1 of 2' not in _prompt(calls[0])
+        assert 'Correction 1 of 2' in _prompt(calls[1]) and code in _prompt(calls[1])
+        ledger = json.loads((research.output / 'validity-starts.json').read_text())
+        assert ledger['counts'] == {'reviewer': 1, 'reviewer_retry': 1}
+        assert sorted(start['kind'] for start in ledger['starts'].values()) == ['reviewer', 'reviewer_retry']
+        attempt = calls[0]['workspace'].parent
+        assert json.loads((attempt / 'verdict-errors.json').read_text())[0]['code'] == code
+        assert (attempt / 'agent/job-config.json').is_file()
+        assert (attempt / 'agent-retry-1/job-config.json').is_file()
+        assert result['evidence']['validity']['decided_by'] == 'reviewer'
+
+
+def test_a_verdict_that_stays_malformed_is_recorded_as_not_judged_and_reviewed_again(tmp_path, agent):
+    calls, outcomes = agent
+    outcomes[:] = ['malformed'] * 3
+    with make(tmp_path, policy()) as research:
+        result = research.record_candidate()
+        assert result['status'] == 'invalid' and len(calls) == 3
+        assert 'Correction 2 of 2' in _prompt(calls[2])
+        validity = result['evidence']['validity']
+        assert validity['controller_error'] == 'VerdictError' and 'decided_by' not in validity
+        assert validity['review_error']['code'] == 'malformed_json' and validity['review_error']['tries'] == 3
+        assert 'line 1 column 2' in validity['review_error']['detail']
+        assert 'not judged' in validity['reasons'][0]
+        assert research.review_failed('candidate-0001') and not research.rejected_by_reviewer('candidate-0001')
+        index = json.loads((research.root / 'history/index.json').read_text())
+        assert index['candidates'][0]['validity']['controller_error'] == 'VerdictError'
+        # Rejected by a failed review, not a reviewer, so it is never measured.
+        assert research.record_candidate('candidate-0001', measure_rejected=True)['status'] == 'valid'
+        assert len(calls) == 4
+
+
+def test_retries_stop_when_their_starts_run_out(tmp_path, agent):
+    calls, outcomes = agent
+    outcomes[:] = ['malformed'] * 5
+    ledger = StartLedger(tmp_path / 'shared.json', limits={'reviewer': 2, 'reviewer_retry': 1}, identity={})
+    with make(tmp_path, policy(ledger=ledger)) as research:
+        assert research.record_candidate()['status'] == 'invalid'
+        assert len(calls) == 2
+        assert research.evidence('candidate-0001')['validity']['review_error']['tries'] == 2
+
+
+def test_a_shared_ledger_without_retry_starts_turns_retries_off(tmp_path, agent):
+    calls, outcomes = agent
+    ledger = StartLedger(tmp_path / 'shared.json', limits={'reviewer': 2}, identity={})
+    assert policy(ledger=ledger).verdict_retries == 0
+    with pytest.raises(ValueError, match='reviewer_retry'):
+        policy(ledger=ledger, verdict_retries=1)
+
+
+def test_a_reviewer_rejection_can_be_measured_but_is_never_selected(tmp_path, agent):
+    calls, outcomes = agent
+    outcomes[:] = ['invalid']
+    with make(tmp_path, policy()) as research:
+        result = research.record_candidate(measure_rejected=True)
+        assert result['status'] == 'invalid' and result['evidence']['evaluation'] == 'completed'
+        assert result['evidence']['metrics'] == {'quality': 1.0}
+        assert research.selected is None and not research.measured('candidate-0001')
+        index = json.loads((research.root / 'history/index.json').read_text())
+        entry = index['candidates'][0]
+        assert entry['evaluation']['metrics'] == {'quality': 1.0}
+        assert [check['criterion'] for check in entry['validity']['checks']] == list(RULES)
+        assert all(check['status'] == 'fail' for check in entry['validity']['checks'])
 
 
 def test_failed_review_is_charged_and_retry_cannot_reset_review_budget(tmp_path, agent):

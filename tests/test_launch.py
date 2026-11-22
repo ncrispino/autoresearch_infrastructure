@@ -157,6 +157,10 @@ def test_a_changed_task_settings_or_image_needs_a_fresh_output(example, change):
     ("", "No reviewer is configured"),
     ('[researcher]\nname = "nop"\nmodel_name = "fixture"\n', "MCP servers and ATIF"),
     (f'[reviewer]\n{AGENT}[reviewer.kwargs]\nunknown_option = true\n', "Unknown"),
+    (f'[reviewer]\n{AGENT}[review]\nretries = 1\n', "\\[review\\] accepts only"),
+    (f'[reviewer]\n{AGENT}[review]\nverdict_retries = 9\n', "from 0 to 5"),
+    (f'[reviewer]\n{AGENT}[review]\nrejected_baseline = "skip"\n', "stop.*continue"),
+    ('reviewer = false\n[review]\nrejected_baseline = "continue"\n', "review is turned off"),
 ])
 def test_invalid_settings_fail_before_anything_is_created(example, text, reason):
     with pytest.raises(ValueError, match=reason):
@@ -185,8 +189,8 @@ def test_the_reviewer_defaults_to_the_researchers_agent(example):
         summary = launch.check_run(run)
         assert summary["review"] == "the task's validity function, then a reviewer"
         # One review for every candidate, one researcher for every candidate after the baseline.
-        assert summary["starts"] == {"researcher": 0, "reviewer": 0}
-        assert run.ledger.limits == {"researcher": 9, "reviewer": 10}
+        assert summary["starts"] == {"researcher": 0, "reviewer": 0, "reviewer_retry": 0}
+        assert run.ledger.limits == {"researcher": 9, "reviewer": 10, "reviewer_retry": 20}
         assert research.validity.agent.name == "codex"
         assert research.validity.criteria == {"rule_1": "value.json holds one integer."}
 
@@ -294,7 +298,7 @@ def test_the_reviewer_sees_only_candidates_that_pass_the_validity_function(examp
     with run.research as research:
         assert isinstance(research.validity, ari.LLMValidity)
         first = launch.record_workspace(run)
-        assert first["review"] == "the task's validity function, then a reviewer" and first["starts"] == {"reviewer": 1}
+        assert first["review"] == "the task's validity function, then a reviewer" and first["starts"] == {"reviewer": 1, "reviewer_retry": 0}
         assert first["observed_cost_usd"] == first["total_cost_usd"] == 0.25
         (research.workspace / "value.json").write_text('"nine"')
         second = launch.record_workspace(run)
@@ -305,7 +309,103 @@ def test_the_reviewer_sees_only_candidates_that_pass_the_validity_function(examp
     assert "mcp_proxy" not in json.dumps(contexts[0]) and "target.json" not in json.dumps(contexts[0])
     assert "It adds no criteria" in instructions[0] and "Submit one candidate" not in instructions[0]
     assert second["candidates"][-1]["reasons"] == ["Use an integer"]
-    assert second["starts"] == {"reviewer": 1} and reviews[0] == {"rule_1": "value.json holds one integer."}
+    assert second["starts"] == {"reviewer": 1, "reviewer_retry": 0} and reviews[0] == {"rule_1": "value.json holds one integer."}
+
+
+def fake_reviewer(monkeypatch, verdicts):
+    """Each review writes the next verdict: "valid", "invalid", or "malformed" for a file that is not JSON."""
+    instructions = []
+
+    def review(**kwargs):
+        assignment = json.loads(next(
+            path for path, target in kwargs["readonly"].items() if target == "/review/assignment.json"
+        ).read_text())
+        instructions.append(kwargs["instruction"])
+        verdict = verdicts.pop(0) if verdicts else "valid"
+        status = "pass" if verdict == "valid" else "fail"
+        text = json.dumps({
+            "candidate_hash": assignment["candidate_hash"], "contract_hash": assignment["contract_hash"],
+            "verdict": "valid" if verdict == "valid" else "invalid", "reasons": ["Fixture review"],
+            "checks": [{"criterion": "rule_1", "status": status, "evidence_paths": ["/review/candidate/value.json"],
+                        "reason": f"Fixture {status}"}],
+        })
+        (kwargs["workspace"] / "validity").mkdir(parents=True, exist_ok=True)
+        (kwargs["workspace"] / "validity/verdict.json").write_text(text + (")" if verdict == "malformed" else ""))
+        return SimpleNamespace(agent_result=SimpleNamespace(cost_usd=0.25), exception_info=None)
+
+    monkeypatch.setattr("autoresearch_infrastructure.review.run_filesystem_agent", review)
+    return instructions
+
+
+REVIEWED = f"[limits]\ncandidates = 3\nevaluations = 3\n[researcher]\n{AGENT}[reviewer]\n{AGENT}"
+
+
+def test_a_baseline_the_reviewer_rejects_stops_the_run_by_default(example, monkeypatch):
+    prompts = fake_researcher(monkeypatch, [5, 9])
+    fake_reviewer(monkeypatch, ["invalid"])
+    run = launch.open_run(example.directory, example.settings(REVIEWED), example.output, IMAGE)
+    with run.research as research:
+        summary = launch.run_researchers(run)
+        assert research.evidence("candidate-0001")["evaluation"] == "not_started"
+    assert summary["status"] == "failed" and 'rejected_baseline = "continue"' in summary["error"]
+    assert prompts == []
+
+
+def test_a_rejected_baseline_can_be_measured_and_fixed_by_researchers(example, monkeypatch):
+    prompts = fake_researcher(monkeypatch, [5, 9])
+    fake_reviewer(monkeypatch, ["invalid"])
+    settings = example.settings(REVIEWED + '[review]\nrejected_baseline = "continue"\n')
+    run = launch.open_run(example.directory, settings, example.output, IMAGE)
+    with run.research as research:
+        summary = launch.run_researchers(run)
+        baseline = research.evidence("candidate-0001")
+        # Measured, but never selectable.
+        assert research.candidates["candidate-0001"]["status"] == "invalid"
+        assert baseline["evaluation"] == "completed" and baseline["metrics"] == {"error": 10.0}
+        assert research.rejected_by_reviewer("candidate-0001") and not research.measured("candidate-0001")
+    assert summary["status"] == "completed" and summary["selected"] == "candidate-0003"
+    # The first researcher starts from the rejected baseline and reads the reviewer's reasons in its history.
+    assert "Your starting version is `candidate-0001`" in prompts[0]
+    index = json.loads((run.research.root / "history/index.json").read_text())
+    assert index["candidates"][0]["validity"]["checks"] == [
+        {"criterion": "rule_1", "status": "fail", "reason": "Fixture fail"}]
+    assert index["candidates"][0]["evaluation"]["metrics"] == {"error": 10.0}
+
+
+def test_a_baseline_the_validity_function_rejects_still_stops_the_run(example, monkeypatch):
+    prompts = fake_researcher(monkeypatch, [5])
+    reviews = fake_reviewer(monkeypatch, [])
+    (example.directory / "seed/value.json").write_text('"zero"')
+    settings = example.settings(REVIEWED + '[review]\nrejected_baseline = "continue"\n')
+    run = launch.open_run(example.directory, settings, example.output, IMAGE)
+    with run.research:
+        summary = launch.run_researchers(run)
+    assert summary["status"] == "failed" and "not valid and fully measured" in summary["error"]
+    assert prompts == [] and reviews == []
+
+
+def test_a_malformed_baseline_verdict_is_corrected_before_anything_is_recorded(example, monkeypatch):
+    fake_researcher(monkeypatch, [5, 9])
+    instructions = fake_reviewer(monkeypatch, ["malformed", "valid"])
+    run = launch.open_run(example.directory, example.settings(REVIEWED), example.output, IMAGE)
+    with run.research as research:
+        summary = launch.run_researchers(run)
+        assert research.measured("candidate-0001")
+    assert "Correction 1 of 2" in instructions[1] and "malformed_json" in instructions[1]
+    assert summary["starts"] == {"researcher": 2, "reviewer": 3, "reviewer_retry": 1}
+
+
+def test_a_baseline_review_that_cannot_finish_says_so(example, monkeypatch):
+    fake_researcher(monkeypatch, [5])
+    fake_reviewer(monkeypatch, ["malformed"] * 3)
+    settings = example.settings(REVIEWED + '[review]\nrejected_baseline = "continue"\n')
+    run = launch.open_run(example.directory, settings, example.output, IMAGE)
+    with run.research:
+        summary = launch.run_researchers(run)
+    assert summary["status"] == "failed" and "review could not finish" in summary["error"]
+    row = summary["candidates"][0]
+    assert row["review_error"] == "VerdictError" and "not judged" in row["reasons"][0]
+    assert summary["starts"]["reviewer_retry"] == 2
 
 
 def test_task_files_must_define_task(tmp_path):
