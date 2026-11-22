@@ -56,6 +56,8 @@ def test_reads_hash_bound_regular_file(tmp_path):
         (lambda value: value["checks"].append(value["checks"][0]), "duplicate_criterion"),
         (lambda value: value["checks"][0].update(evidence_paths=[]), "passing_check_without_evidence"),
         (lambda value: value["checks"][0].update(status="fail"), "valid_with_nonpassing_check"),
+        (lambda value: value["checks"][0].update(reason=""), "invalid_check_reason"),
+        (lambda value: value["checks"][0].update(note="x"), "invalid_check_schema"),
     ],
 )
 def test_rejects_invalid_schema_and_binding(tmp_path, mutate, code):
@@ -63,8 +65,30 @@ def test_rejects_invalid_schema_and_binding(tmp_path, mutate, code):
     mutate(value)
     path = tmp_path / "verdict.json"
     write_json(path, value)
-    with pytest.raises(VerdictError, match=code):
+    with pytest.raises(VerdictError, match=code) as raised:
         read_verdict(path, HASH_A, HASH_B, CRITERIA, evidence_roots(tmp_path))
+    # Only a verdict bound to another candidate or setup is refused outright; the rest is the reviewer's form.
+    assert raised.value.correctable == ("mismatch" not in code)
+
+
+def test_each_check_may_carry_its_own_reason(tmp_path):
+    value = payload()
+    value["checks"][0]["reason"] = "Only the candidate value changed."
+    path = tmp_path / "verdict.json"
+    write_json(path, value)
+    verdict = read_verdict(path, HASH_A, HASH_B, CRITERIA, evidence_roots(tmp_path))
+    assert [check.reason for check in verdict.checks] == ["Only the candidate value changed.", None]
+    saved = verdict.to_dict()["checks"]
+    assert saved[0]["reason"] == "Only the candidate value changed." and "reason" not in saved[1]
+
+
+def test_malformed_json_says_where(tmp_path):
+    path = tmp_path / "verdict.json"
+    path.write_text(json.dumps(payload())[:-1] + ")}")
+    with pytest.raises(VerdictError, match="malformed_json") as raised:
+        read_verdict(path, HASH_A, HASH_B, CRITERIA, evidence_roots(tmp_path))
+    assert raised.value.code == "malformed_json" and "line 1 column" in raised.value.detail
+    assert raised.value.correctable
 
 
 def test_missing_and_symlink_fail_closed(tmp_path):

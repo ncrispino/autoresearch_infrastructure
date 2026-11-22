@@ -13,9 +13,32 @@ MAX_TEXT = 4_096
 
 
 class VerdictError(ValueError):
-    def __init__(self, code: str):
-        super().__init__(code)
+    """A verdict file that cannot be accepted. ``code`` names the rule it broke; ``detail`` says where."""
+
+    def __init__(self, code: str, detail: str | None = None):
+        super().__init__(f"{code}: {detail}" if detail else code)
         self.code = code
+        self.detail = detail
+
+    @property
+    def correctable(self) -> bool:
+        """Whether the error is in the verdict's form, which the reviewer can fix by rewriting it.
+
+        A form error says nothing about the candidate. Hash mismatches and unsafe
+        files or paths are not correctable: they are refused outright.
+        """
+        return self.code in CORRECTABLE_VERDICT_ERRORS
+
+
+# Errors in what the reviewer wrote, as opposed to a verdict bound to another candidate or an unsafe file.
+CORRECTABLE_VERDICT_ERRORS = frozenset({
+    "missing_file", "invalid_utf8", "malformed_json", "invalid_schema", "invalid_verdict", "invalid_reasons",
+    "invalid_checks", "invalid_check_schema", "invalid_criterion", "duplicate_criterion", "unknown_criterion",
+    "missing_criterion", "invalid_check_status", "invalid_check_reason", "invalid_evidence_paths",
+    "invalid_evidence_path", "passing_check_without_evidence", "missing_evidence",
+    "evidence_path_outside_review", "valid_with_nonpassing_check", "invalid_without_failed_check",
+    "invalid_candidate_hash", "invalid_contract_hash",
+})
 
 
 @dataclass(frozen=True)
@@ -23,6 +46,7 @@ class ValidityCheck:
     criterion: str
     status: str
     evidence_paths: tuple[str, ...]
+    reason: str | None = None  # the reviewer's reason for this criterion's status, when it gave one
 
     def __post_init__(self):
         if self.status not in {"pass", "fail"}:
@@ -46,7 +70,12 @@ class ValidityVerdict:
             **asdict(self),
             "reasons": list(self.reasons),
             "checks": [
-                {**asdict(check), "evidence_paths": list(check.evidence_paths)} for check in self.checks
+                {
+                    key: value
+                    for key, value in {**asdict(check), "evidence_paths": list(check.evidence_paths)}.items()
+                    if key != "reason" or value is not None
+                }
+                for check in self.checks
             ],
         }
 
@@ -188,8 +217,10 @@ def read_verdict(
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise VerdictError("malformed_json") from exc
+    except json.JSONDecodeError as exc:
+        raise VerdictError("malformed_json", f"{exc.msg} at line {exc.lineno} column {exc.colno}") from exc
+    except ValueError as exc:
+        raise VerdictError("malformed_json", str(exc)) from exc
     if not isinstance(value, dict) or set(value) != {
         "candidate_hash",
         "contract_hash",
@@ -197,7 +228,9 @@ def read_verdict(
         "reasons",
         "checks",
     }:
-        raise VerdictError("invalid_schema")
+        found = sorted(value) if isinstance(value, dict) else type(value).__name__
+        raise VerdictError("invalid_schema", f"expected exactly candidate_hash, contract_hash, verdict, "
+                                             f"reasons and checks; found {found}")
     candidate_hash = _text(value["candidate_hash"], field="candidate_hash", maximum=128)
     contract_hash = _text(value["contract_hash"], field="contract_hash", maximum=128)
     if candidate_hash != expected_candidate_hash:
@@ -222,30 +255,38 @@ def read_verdict(
     parsed: list[ValidityCheck] = []
     seen = set()
     for check in checks:
-        if not isinstance(check, dict) or set(check) != {"criterion", "status", "evidence_paths"}:
-            raise VerdictError("invalid_check_schema")
+        if not isinstance(check, dict) or not (
+            {"criterion", "status", "evidence_paths"} <= set(check) <= {"criterion", "status", "evidence_paths", "reason"}
+        ):
+            found = sorted(check) if isinstance(check, dict) else type(check).__name__
+            raise VerdictError("invalid_check_schema", f"a check has criterion, status, evidence_paths and "
+                                                       f"reason; found {found}")
         criterion = _text(check["criterion"], field="criterion", maximum=128)
         if criterion in seen:
-            raise VerdictError("duplicate_criterion")
+            raise VerdictError("duplicate_criterion", criterion)
         seen.add(criterion)
         if criterion not in required_criteria:
-            raise VerdictError("unknown_criterion")
+            raise VerdictError("unknown_criterion", criterion)
         status_value = check["status"]
         if status_value not in {"pass", "fail"}:
-            raise VerdictError("invalid_check_status")
+            raise VerdictError("invalid_check_status", f"{criterion}: status must be pass or fail")
+        reason = _text(check["reason"], field="check_reason") if "reason" in check else None
         paths = check["evidence_paths"]
         if not isinstance(paths, list) or len(paths) > 32:
-            raise VerdictError("invalid_evidence_paths")
+            raise VerdictError("invalid_evidence_paths", criterion)
         parsed_paths = tuple(_text(item, field="evidence_path") for item in paths)
         if status_value == "pass" and not parsed_paths:
-            raise VerdictError("passing_check_without_evidence")
+            raise VerdictError("passing_check_without_evidence", criterion)
         for evidence_path in parsed_paths:
-            _validate_evidence_path(evidence_path, evidence_roots)
+            try:
+                _validate_evidence_path(evidence_path, evidence_roots)
+            except VerdictError as exc:
+                raise VerdictError(exc.code, f"{criterion} cites {evidence_path}") from exc
         if check_policy is not None:
             check_policy(criterion, status_value, parsed_paths, evidence_roots)
-        parsed.append(ValidityCheck(criterion, status_value, parsed_paths))
+        parsed.append(ValidityCheck(criterion, status_value, parsed_paths, reason))
     if seen != set(required_criteria):
-        raise VerdictError("missing_criterion")
+        raise VerdictError("missing_criterion", ", ".join(c for c in required_criteria if c not in seen))
     if verdict == "valid" and any(check.status != "pass" for check in parsed):
         raise VerdictError("valid_with_nonpassing_check")
     if verdict == "invalid" and not any(check.status == "fail" for check in parsed):

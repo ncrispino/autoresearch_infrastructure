@@ -23,6 +23,8 @@ _LIMITS = {
     "parallel": "parallel_evaluations",
 }
 _TIMEOUTS = ("override_timeout_sec", "override_setup_timeout_sec", "max_timeout_sec")
+# [review] keys and their defaults. ``verdict_retries`` matches review.VERDICT_RETRIES.
+_REVIEW = {"verdict_retries": 2, "rejected_baseline": "stop"}
 
 
 @dataclass(frozen=True)
@@ -159,17 +161,26 @@ class RunSettings:
         The Harbor agent that judges each candidate against the instructions.
         It defaults to the researcher's agent. Write ``reviewer = false`` to turn
         review off.
+    ``[review]``
+        How review goes. ``verdict_retries`` is how many more starts the
+        reviewer may use to fix a verdict file that cannot be read, such as
+        malformed JSON (default 2). ``rejected_baseline`` is what ``run`` does
+        when the reviewer rejects the baseline: ``"stop"`` (the default), or
+        ``"continue"``, which evaluates the baseline anyway, without making it
+        selectable, and starts researchers from it.
     ``[task]``
         Values the task reads, such as the solver it evaluates.
 
     Agent starts follow from the limits: one reviewer start for each candidate,
-    and one researcher start for each candidate after the baseline.
+    and one researcher start for each candidate after the baseline. Verdict
+    retries have their own starts, ``verdict_retries`` for each candidate.
     """
 
     limits: Limits = Limits()
     researcher: dict | None = None
     reviewer: dict | None = None
     task: dict = field(default_factory=dict)
+    review: dict = field(default_factory=lambda: dict(_REVIEW))
 
     @classmethod
     def load(cls, path: Path) -> RunSettings:
@@ -177,7 +188,7 @@ class RunSettings:
 
     @classmethod
     def parse(cls, data: dict) -> RunSettings:
-        tables = {"limits", "researcher", "reviewer", "task"}
+        tables = {"limits", "researcher", "reviewer", "review", "task"}
         if set(data) - tables:
             raise ValueError(f"Run settings accept only {sorted(tables)}; found {sorted(set(data) - tables)}")
         limits = data.get("limits", {})
@@ -200,7 +211,8 @@ class RunSettings:
         elif max(reviewer.get(name) or 0 for name in _TIMEOUTS) > 7200:
             raise ValueError("The reviewer defaults to the researcher's agent, whose timeout is over the "
                              "reviewer's 7200 seconds. Add a [reviewer] table with its own timeout")
-        return cls(Limits(**fields), researcher, reviewer, dict(data.get("task", {})))
+        return cls(Limits(**fields), researcher, reviewer, dict(data.get("task", {})),
+                   _review(data.get("review", {}), reviewer))
 
     @property
     def repeats(self) -> int:
@@ -214,10 +226,27 @@ class RunSettings:
             starts["researcher"] = self.limits.max_candidates - 1
         if self.reviewer:
             starts["reviewer"] = self.limits.max_candidates
+            if self.review["verdict_retries"]:
+                starts["reviewer_retry"] = self.limits.max_candidates * self.review["verdict_retries"]
         return starts
 
     def identity(self) -> dict:
         return asdict(self)
+
+
+def _review(table, reviewer) -> dict:
+    """Check the ``[review]`` table and fill its defaults."""
+    if not isinstance(table, dict) or set(table) - set(_REVIEW):
+        raise ValueError(f"[review] accepts only {sorted(_REVIEW)}")
+    if table and reviewer is None:
+        raise ValueError("[review] configures the reviewer, but review is turned off")
+    review = {**_REVIEW, **table}
+    retries = review["verdict_retries"]
+    if type(retries) is not int or not 0 <= retries <= 5:
+        raise ValueError("[review] verdict_retries must be an integer from 0 to 5")
+    if review["rejected_baseline"] not in ("stop", "continue"):
+        raise ValueError('[review] rejected_baseline must be "stop" or "continue"')
+    return review
 
 
 def _agent(table, role: str) -> dict:

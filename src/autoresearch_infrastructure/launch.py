@@ -76,8 +76,7 @@ class OpenRun:
             summary["reevaluates"] = {
                 "source": str(self.replay_source),
                 "candidates": [entry["id"] for entry in self.replay],
-                "pending": [entry["id"] for entry in self.replay if not research.measured(entry["id"])
-                            and research.candidates.get(entry["id"], {}).get("status") != "invalid"],
+                "pending": [entry["id"] for entry in self.replay if _pending(research, entry["id"])],
             }
         lineage = research.state.get("lineage")
         if lineage:
@@ -124,6 +123,8 @@ def _row(research: Research, candidate_id: str) -> dict:
         "parent_id": record["parent_id"],
         "status": record["status"],
         "reasons": list(evidence.get("validity", {}).get("reasons", record.get("reasons", []))),
+        # Set when validity could not be decided, such as an unreadable verdict: the candidate was not judged.
+        "review_error": evidence.get("validity", {}).get("controller_error"),
         "evaluation": evidence.get("evaluation", "not_started"),
         "metrics": evidence.get("metrics"),
         "score": evidence.get("score"),
@@ -428,7 +429,7 @@ def _replay(run: OpenRun) -> None:
     research, repeats = run.research, run.settings.repeats
     for entry in run.replay or ():
         if entry["id"] in research.candidates:
-            if not research.measured(entry["id"]) and research.candidates[entry["id"]]["status"] != "invalid":
+            if _pending(research, entry["id"]):
                 research.record_candidate(entry["id"], total_repeats=repeats)
             continue
         research.reset_workspace(entry["files"])
@@ -436,6 +437,15 @@ def _replay(run: OpenRun) -> None:
         result = research.record_candidate(total_repeats=repeats, parent_id=entry["parent_id"], proposal=proposal)
         if result["candidate_id"] != entry["id"]:
             raise RuntimeError(f"Re-evaluated {entry['id']} was saved as {result['candidate_id']}")
+
+
+def _pending(research: Research, candidate_id: str) -> bool:
+    """Whether a re-evaluated candidate still needs work: it is unmeasured and was not judged invalid."""
+    if candidate_id not in research.candidates:
+        return True
+    if research.measured(candidate_id):
+        return False
+    return research.candidates[candidate_id]["status"] != "invalid" or research.review_failed(candidate_id)
 
 
 def _json(value):
@@ -490,7 +500,8 @@ def _validity(task: Task, inputs: ResearcherInputs, settings: RunSettings, image
         rules = inputs.named_rules
         return LLMValidity(rules, agent=settings.reviewer, image=None if environment else image,
                            environment=environment, ledger=ledger,
-                           context={TASK_SPECIFICATION: instructions}, precheck=task.validity)
+                           context={TASK_SPECIFICATION: instructions}, precheck=task.validity,
+                           verdict_retries=settings.review["verdict_retries"])
     return task.validity or _unchecked
 
 
@@ -544,6 +555,12 @@ def run_researchers(run: OpenRun) -> dict:
 
     Each researcher starts from the selected candidate and may submit one new
     candidate, or several in one session when the task's memory says so. Rerunning the command continues with whatever budget is left.
+
+    The baseline must be valid and fully measured. With ``rejected_baseline =
+    "continue"`` under ``[review]``, a baseline the reviewer rejected is
+    measured anyway, is never selected, and researchers start from it with
+    the reviewer's reasons in ``/history``. A baseline that the task's
+    validity function rejects, or whose review could not finish, still stops the run.
     """
     settings, research, ledger = run.settings, run.research, run.ledger
     if settings.researcher is None:
@@ -565,12 +582,13 @@ def run_researchers(run: OpenRun) -> dict:
     try:
         _prepare(run)
         _replay(run)
+        rejected = settings.review["rejected_baseline"] == "continue"
         if research.candidates:
-            research.record_candidate(BASELINE, total_repeats=repeats)
+            research.record_candidate(BASELINE, total_repeats=repeats, measure_rejected=rejected)
         else:
-            research.record_candidate(total_repeats=repeats, proposal={"hypothesis": "Unchanged starting files"})
-        if not research.measured(BASELINE):
-            raise RuntimeError("The baseline is not valid and fully measured, so no researcher was started")
+            research.record_candidate(total_repeats=repeats, proposal={"hypothesis": "Unchanged starting files"},
+                                      measure_rejected=rejected)
+        _check_baseline(research, rejected)
         while (stopped := _exhausted(run, panel)) is None:
             parent = research.selected or BASELINE
             number = len(researcher_starts(research)) + 1
@@ -617,6 +635,22 @@ def run_researchers(run: OpenRun) -> dict:
         summary["stopped"] = stopped
         summary["improved"] = research.selected not in (None, BASELINE)
     return run.save(summary)
+
+
+def _check_baseline(research: Research, measure_rejected: bool) -> None:
+    """Raise unless researchers may start from the baseline."""
+    if research.measured(BASELINE):
+        return
+    measured = research.evidence(BASELINE).get("evaluation") == "completed"
+    if measure_rejected and measured and research.rejected_by_reviewer(BASELINE):
+        return
+    if research.review_failed(BASELINE):
+        raise RuntimeError("The baseline's review could not finish, so no researcher was started. "
+                           "Run the command again to review it again")
+    if research.rejected_by_reviewer(BASELINE) and not measure_rejected:
+        raise RuntimeError("The reviewer rejected the baseline, so no researcher was started. To measure it "
+                           'anyway and let researchers fix it, write rejected_baseline = "continue" under [review]')
+    raise RuntimeError("The baseline is not valid and fully measured, so no researcher was started")
 
 
 def _exhausted(run: OpenRun, panel: int, starting: bool = True) -> str | None:

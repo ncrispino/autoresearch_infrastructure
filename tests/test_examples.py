@@ -79,7 +79,7 @@ def test_curve_live_settings_open_without_credentials_or_starts(tmp_path):
     result = ari("check", EXAMPLES / "curve-fitting", tmp_path / "live")  # no --image: the task's own container
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout)
-    assert summary["starts"] == {"researcher": 0, "reviewer": 0}
+    assert summary["starts"] == {"researcher": 0, "reviewer": 0, "reviewer_retry": 0}
     assert summary["review"] == "the task's validity function, then a reviewer"
     assert summary["budget"]["reviews"]["limit"] == 2
     plan = json.loads((tmp_path / "live/plan.json").read_text())
@@ -113,8 +113,8 @@ def test_packing_demo_selects_the_best_selection_within_the_weight_limit(tmp_pat
 
 
 @pytest.mark.parametrize("name, kinds", [
-    ("sum-instructions", ["researcher", "reviewer", "solver_trial"]),
-    ("sum-harness", ["researcher", "reviewer", "solver_trial", "solver_session"]),
+    ("sum-instructions", ["researcher", "reviewer", "reviewer_retry", "solver_trial"]),
+    ("sum-harness", ["researcher", "reviewer", "reviewer_retry", "solver_trial", "solver_session"]),
 ])
 def test_sum_examples_are_self_contained_and_open_without_starts(tmp_path, name, kinds):
     pytest.importorskip("harbor")

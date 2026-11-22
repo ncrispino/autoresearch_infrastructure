@@ -67,7 +67,7 @@ def _feedback(value: dict) -> dict:
         result["error"] = value["error"]
     validity = evidence.get("validity", {})
     result["validity"] = {key: validity[key] for key in (
-        "verdict", "reasons", "checks", "controller_error",
+        "verdict", "reasons", "checks", "decided_by", "controller_error", "review_error",
     ) if key in validity}
     result["evaluation"] = {key: evidence[key] for key in (
         "evaluation", "metrics", "score", "total_repeats", "task_completed", "feasible",

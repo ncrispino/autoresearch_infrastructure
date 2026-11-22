@@ -85,13 +85,14 @@ with the Harbor task's grader as the evaluator.
 
 ## Run settings
 
-Run settings are one TOML file, `run.toml`, with four tables and no others:
+Run settings are one TOML file, `run.toml`, with five tables and no others:
 
 | Table | Contents |
 | --- | --- |
 | `[limits]` | How much the run may do. The keys are listed below. |
 | `[researcher]` | The Harbor agent that proposes candidates, as a Harbor `AgentConfig` table with a `model_name`. Leave it out to propose candidates yourself with `ari record`. |
 | `[reviewer]` | The Harbor agent that judges each candidate against the task's instructions. Leave it out to use the researcher's agent. |
+| `[review]` | How review goes, when review is on. The keys are listed below. |
 | `[task]` | Values the task reads from `run.settings.task`. `[task.solver]` is the solver: the agent being evaluated, in tasks that evaluate one. |
 
 | `[limits]` key | Default | Meaning |
@@ -101,13 +102,20 @@ Run settings are one TOML file, `run.toml`, with four tables and no others:
 | `repeats` | 1 | Times each candidate is evaluated on each case. A candidate needs this many complete repeats before it can be selected. |
 | `parallel` | 1 | Evaluations that run at the same time. |
 
+| `[review]` key | Default | Meaning |
+| --- | --- | --- |
+| `verdict_retries` | 2 | Extra reviewer starts, 0 to 5, that one review may use when the reviewer's verdict file cannot be read. See [The reviewer](#the-reviewer). |
+| `rejected_baseline` | `"stop"` | What `ari run` does when the reviewer rejects the baseline. `"stop"` starts no researcher. `"continue"` evaluates the baseline anyway and starts researchers from it. |
+
 Review is on by default. To turn it off, write `reviewer = false` above the
 tables. Then the task's `validity` function alone decides validity. Settings that have no
 `[researcher]`, no `[reviewer]` and no `reviewer = false` are refused, and so is
 running without a settings file.
 
 The limits also fix the agent starts: one reviewer start for each candidate, and
-one researcher start for each candidate after the baseline. See
+one researcher start for each candidate after the baseline. Verdict retries have
+their own `reviewer_retry` starts, `verdict_retries` for each candidate, so they
+never use a start meant for a later candidate. See
 [Starts and the ledger](#starts-and-the-ledger).
 
 The researcher's timeout (`override_timeout_sec`) defaults to the task's own
@@ -155,6 +163,12 @@ run: `the task's validity function, then a reviewer`, `the task's validity funct
 `a reviewer` or `off`.
 
 If the baseline is invalid or not fully measured, `ari run` starts no researcher.
+With `rejected_baseline = "continue"` under `[review]`, a baseline that the
+reviewer rejected is evaluated anyway. It stays invalid and is never selected,
+and researchers start from it, with the reviewer's reasons in `/history` as for
+any rejected candidate, so the first candidates can fix what the reviewer found.
+A baseline that the task's `validity` function rejects, or whose review could
+not finish, still stops the run.
 Each researcher works on a copy of the selected candidate and may submit one
 candidate. The run stops when the candidates, the evaluations or the starts of
 either agent run out. Running the command again continues with the budget that
@@ -462,7 +476,7 @@ specification is part of the reviewer's identity, so editing only the Objective
 or the Environment list still requires a fresh output, and an old verdict is
 never reused for a changed specification.
 
-Each review is one Harbor job with one attempt and uses one `reviewer` start. A
+Each review is one Harbor job with one attempt and uses one `reviewer` start, plus a `reviewer_retry` start for each correction described below. A
 candidate that fails the validity function uses none. The reviewer reads the candidate at
 `/review/candidate`, the baseline at `/review/baseline` and its assignment at
 `/review/assignment.json`. It must write `/workspace/validity/verdict.json`. ARI
@@ -473,8 +487,24 @@ accepts the verdict only if all of these hold:
 - Every `pass` cites at least one file that exists in the candidate.
 - It says `valid` only when every criterion passes.
 
-A missing, malformed or mismatched verdict file makes the candidate invalid. The
-reviewer's messages are never read as a verdict. A saved verdict is reused when
+Each check may also give a `reason`, a sentence or two on that criterion alone.
+The template asks for one, so read each criterion's result from
+`checks[].status` and `checks[].reason`, never from the wording of `reasons`.
+`history/index.json` lists the checks of every candidate.
+
+A verdict file that cannot be read because of its form, such as malformed JSON,
+a missing criterion or a cited file that does not exist, says nothing about the
+candidate. ARI then starts the reviewer again, up to `verdict_retries` times, with
+the error added to its instructions and its earlier file still in place, before
+anything is recorded. Each of these starts is a `reviewer_retry` start, and each
+error is saved in the attempt's `verdict-errors.json`. A verdict bound to another
+candidate or setup, or an unsafe file, is refused without a retry.
+
+If the verdict still cannot be accepted, the candidate is recorded as invalid
+with a `controller_error`, and its reason says that it was not judged. This is
+distinct from a reviewer's `invalid`: `history/index.json` and the run summary
+show the `controller_error`, and recording the candidate again reviews it again.
+The reviewer's messages are never read as a verdict. A saved verdict is reused when
 repeats are added. A verdict is a judgment. It does not prove that a candidate is
 correct or better.
 
@@ -502,12 +532,21 @@ validity = ari.LLMValidity(
 - `max_reviews` is the number of reviewer starts allowed for this output. The
   default is 10, counted in `validity-starts.json`. Pass `ledger=` instead to
   count reviews in a shared `StartLedger` that has a `reviewer` limit.
+- `verdict_retries` is how many `reviewer_retry` starts one review may use to
+  fix a verdict file it could not have accepted. The default is 2, with
+  `2 * max_reviews` such starts for the output. With a shared ledger, retries
+  need a `reviewer_retry` limit in it and are off without one.
+
+`research.record_candidate(..., measure_rejected=True)` also evaluates a
+candidate that a reviewer rejected, without making it selectable. This is how
+`rejected_baseline = "continue"` measures the baseline.
 
 Creating an `LLMValidity` starts nothing.
 
 `FileValidity(reviewer, criteria=...)` in `autoresearch_infrastructure.review`
 applies the same verdict conditions to your own `reviewer(candidate,
-verdict_path, prompt)` function. You are responsible for isolating it.
+verdict_path, prompt)` function. You are responsible for isolating it. Its
+`verdict_retries`, 0 by default, calls your function again in the same way.
 
 ### Relabel a finished run
 
@@ -524,7 +563,8 @@ Paths are relative to the run directory:
 | `research/sessions/research/history/candidates/<id>/validity/<contract>/attempt-NNNN/assignment.json` | The criteria and task specification each review used |
 | `research/sessions/research/history/index.json` | Every candidate's parent, proposal, verdict and scores |
 
-Candidates the reviewer rejected were not evaluated, so they have no scores.
+Candidates the reviewer rejected were not evaluated, so they have no scores,
+except a baseline measured under `rejected_baseline = "continue"`.
 
 ## Write an evaluator
 
@@ -594,6 +634,7 @@ follow from the run settings:
 | --- | --- | --- |
 | `researcher` | Each researcher start. | `candidates` minus one, because the baseline needs no researcher. |
 | `reviewer` | Each review. | `candidates`. |
+| `reviewer_retry` | Each extra start that fixes an unreadable verdict. | `candidates` times `verdict_retries`. |
 | `solver_trial` | Each Harbor trial that a Harbor evaluator runs. | Named by the task. |
 | `solver_session` | Each solver session inside a `HarborHarnessEvaluator` trial. | Named by the task. |
 

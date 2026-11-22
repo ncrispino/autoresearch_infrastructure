@@ -300,7 +300,7 @@ def test_an_extension_with_a_reviewer_reuses_verdicts_and_counts_review_starts(t
     fixture_agent(monkeypatch, [4])
     source = launch.open_run(directory, reviewed(2, "run.toml"), tmp_path / "source", IMAGE)
     with source.research:
-        assert launch.run_researchers(source)["starts"] == {"researcher": 1, "reviewer": 2}
+        assert launch.run_researchers(source)["starts"] == {"researcher": 1, "reviewer": 2, "reviewer_retry": 0}
     assert len(reviews) == 2
 
     fixture_agent(monkeypatch, [9])
@@ -309,6 +309,6 @@ def test_an_extension_with_a_reviewer_reuses_verdicts_and_counts_review_starts(t
     with child.research:
         summary = launch.run_researchers(child)
     assert len(reviews) == 3  # only the new candidate is reviewed
-    assert summary["starts"] == {"researcher": 2, "reviewer": 3}
-    assert summary["start_limits"] == {"researcher": 2, "reviewer": 3}
+    assert summary["starts"] == {"researcher": 2, "reviewer": 3, "reviewer_retry": 0}
+    assert summary["start_limits"] == {"researcher": 2, "reviewer": 3, "reviewer_retry": 6}
     assert [row["status"] for row in summary["candidates"]] == ["valid", "valid", "valid"]
